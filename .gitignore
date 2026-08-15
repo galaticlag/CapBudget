@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Runtime data: core + per-household SQLite DBs, WAL/SHM sidecars, backups
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+
+# Bank export / import CSVs (real household financial data, never commit)
+*.csv
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temp scripts (ad-hoc one-off scripts created during debugging sessions)
+tmp_*.js
+tmp_*.csv
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+claude.md
+initial_spec.md
+issue_identified.md

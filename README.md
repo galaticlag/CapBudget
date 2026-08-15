@@ -17,8 +17,10 @@ right) with month-range filters and category drill-down.
   dates are row errors, never silently guessed), see duplicate/potential-duplicate
   detection, then commit.
 - **Categorization rules**: auto-assign category/subcategory/cashflow/nature to new (or
-  historical) transactions based on `CONTAINS` / `EQUALS` / `REGEX` matches on the raw or
-  suggested label.
+  historical) transactions based on `CONTAINS` / `EQUALS` / `REGEX` matches. Each rule can
+  compare its value against any combination of the raw label, suggested label and/or
+  comment at once (matches if ANY of the checked fields matches) — handy for bulk
+  categorization.
 - **Budget types**: each household gets 3 default budget types — `Besoins essentiels`
   (50%), `Envies / Loisirs` (30%), `Épargne` (20%) — that top-level categories can be
   linked to. The dashboard compares actual spend split vs. these targets.
@@ -27,6 +29,9 @@ right) with month-range filters and category drill-down.
   but excluded from the Sankey and totals.
 - **Audit log**: every create/update/archive action is logged, per household and
   globally (for ADMIN-level actions).
+- **Backup & restore**: any MEMBER can download their household's full SQLite database
+  from **Paramètres**, and restore it later (e.g. after migrating the server to a
+  Raspberry Pi). See [Backup & restore](#backup--restore) below.
 - **Themes**: system / light / dark / high-contrast, saved per user.
 
 ## Roles
@@ -44,13 +49,13 @@ the client never supplies a raw database path, only a household ID that gets che
 
 | Field | Values |
 |---|---|
-| `match_field` | `RAW_LABEL`, `SUGGESTED_LABEL` |
+| `match_raw_label`, `match_suggested_label`, `match_comment` | Booleans — at least one must be `true`. The rule matches a transaction as soon as ONE of the checked fields matches (OR, not AND). |
 | `match_type` | `CONTAINS` (case-insensitive substring), `EQUALS` (case-insensitive exact), `REGEX` (case-insensitive, guarded against catastrophic-backtracking patterns) |
 
 Rules can set `category_id`, `subcategory_id`, `cashflow_id` and/or `nature`. The first
-matching active rule wins. Rules can be re-applied to historical transactions, but never
-overwrite a transaction that was manually edited (`is_manually_edited = 1`) unless you
-explicitly opt in to overwrite manual changes.
+matching active rule wins (rules are evaluated oldest-first). Rules can be re-applied to
+historical transactions, but never overwrite a transaction that was manually edited
+(`is_manually_edited = 1`) unless you explicitly opt in to overwrite manual changes.
 
 ## Requirements
 
@@ -76,8 +81,9 @@ variables:
 | `HOST` | `0.0.0.0` | Bind address |
 | `APP_DATA_DIR` | `<project>/data` | Where `core.sqlite` and `households/*.sqlite` are stored |
 
-Data is stored entirely under `APP_DATA_DIR`, separate from the application code —
-back up/restore by copying that directory.
+Data is stored entirely under `APP_DATA_DIR`, separate from the application code — you
+can back up/restore the whole app by copying that directory (server stopped), or restore
+a single household's data live from the UI — see [Backup & restore](#backup--restore).
 
 ## Install & run (Docker)
 
@@ -131,6 +137,30 @@ since there is no secondary admin account by default.
    - Use **Tableau de bord** for the Sankey view and budget-type target-vs-actual
      breakdown.
 
+## Backup & restore
+
+Each household can export/import its own SQLite file straight from the app, without
+server/file access — useful for testing, or migrating the whole deployment to another
+machine (e.g. a Raspberry Pi):
+
+- **Paramètres → Télécharger une sauvegarde**: checkpoints the household's WAL, then
+  downloads its live `.sqlite` file as-is (`GET /api/household/backup`).
+- **Paramètres → Restaurer depuis une sauvegarde**: pick a previously downloaded
+  `.sqlite` file and upload it (`POST /api/household/restore`, up to 64 MB). The server:
+  1. rejects anything that isn't a real SQLite file (magic header check);
+  2. copies the *current* household file to `data/backups/` first, as a safety net;
+  3. closes the cached connection, overwrites the file (and clears stale `-wal`/`-shm`
+     sidecars), then reopens it — re-running schema migrations automatically.
+
+This **replaces all of that household's data**, and only that household's — other
+households sharing the same server/core database are untouched. There's no confirmation
+undo beyond the automatic safety copy in `data/backups/`, so double-check the file you're
+uploading.
+
+To migrate the entire app to a new machine (all households, users, sessions), stop the
+server and copy the whole `APP_DATA_DIR` directory instead — the in-app backup only
+covers one household's database.
+
 ## Testing
 
 ```bash
@@ -149,7 +179,7 @@ src/
   auth/                 Password hashing, session middleware, RBAC checks
   db/                   core.sqlite + per-household sqlite schema/connections
   routes/               REST endpoints (auth, setup, admin, households, referentials,
-                         transactions, imports, dashboard, audit)
+                         transactions, imports, dashboard, audit, household backup/restore)
   services/             Business logic (import parsing/dedup, rules, dashboard
                          aggregation, seeding, audit logging)
   util/                 ID generation helpers

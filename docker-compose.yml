@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+    container_name: capbudget-app
+    ports:
+      - "3000:3000"
+    environment:
+      APP_DATA_DIR: /app-data
+    volumes:
+      - capbudget_data:/app-data
+    restart: unless-stopped
+
+volumes:
+  capbudget_data:
+    driver: local
