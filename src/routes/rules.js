@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { newId } = require('../util/ids');
@@ -125,7 +126,10 @@ async function rulesRoutes(app) {
       match_type: matchType,
       match_value: matchValue
     };
-    const transactions = request.householdDb.prepare("SELECT raw_label, suggested_label, comment FROM transactions WHERE status='ACTIVE'").all();
+    /** @type {{ raw_label: string, suggested_label: string | null, comment: string | null }[]} */
+    const transactions = /** @type {any} */ (
+      request.householdDb.prepare("SELECT raw_label, suggested_label, comment FROM transactions WHERE status='ACTIVE'").all()
+    );
     const matchCount = transactions.filter((t) => matches(fakeRule, t.raw_label, t.suggested_label, t.comment)).length;
     return { matchCount };
   });

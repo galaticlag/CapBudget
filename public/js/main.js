@@ -32,6 +32,9 @@ let currentUser = null;
 let currentHouseholds = [];
 let navDropdownEl = null;
 
+// Dashboard global UI state (per session). Views can read it and react to events.
+window.__capbudgetHideAmounts = false;
+
 // Single global listener (registered once) closes whichever nav dropdown is currently open.
 document.addEventListener('click', (event) => {
   if (navDropdownEl && !navDropdownEl.contains(event.target)) {
@@ -125,6 +128,21 @@ function buildTopbar() {
     }, ['✏️']));
   }
 
+  const dashboardEye = (!isAdmin)
+    ? el('button', {
+      class: 'ghost-button topbar-eye-toggle',
+      type: 'button',
+      title: 'Masquer / afficher les montants',
+      onclick: () => {
+        window.__capbudgetHideAmounts = !window.__capbudgetHideAmounts;
+        dashboardEye.replaceChildren(document.createTextNode(window.__capbudgetHideAmounts ? '🙈' : '👁️'));
+        window.dispatchEvent(new CustomEvent('capbudget:hide-amounts-changed', {
+          detail: { hideAmounts: window.__capbudgetHideAmounts }
+        }));
+      }
+    }, [window.__capbudgetHideAmounts ? '🙈' : '👁️'])
+    : null;
+
   return el('div', { class: 'topbar' }, [
     el('div', { class: 'topbar-branding' }, [
       el('p', { class: 'eyebrow' }, ['CapBudget']),
@@ -132,6 +150,7 @@ function buildTopbar() {
     ]),
     el('div', { class: 'topbar-right' }, [
       householdSwitcher,
+      dashboardEye,
       navWrapper,
       el('span', { class: 'user-chip' }, [`👤 ${currentUser.login}`]),
       el('button', {

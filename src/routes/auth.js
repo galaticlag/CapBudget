@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { db: coreDb } = require('../db/core');
@@ -19,7 +20,9 @@ async function authRoutes(app) {
         reply.code(400);
         return { error: 'Identifiant et mot de passe requis.' };
       }
-      const user = coreDb.prepare('SELECT * FROM users WHERE login = ? AND is_active = 1').get(String(login).trim());
+      const user = /** @type {import('../types').User | undefined} */ (/** @type {any} */ (
+        coreDb.prepare('SELECT * FROM users WHERE login = ? AND is_active = 1').get(String(login).trim())
+      ));
       if (!dummyHashPromise) dummyHashPromise = hashPassword('capbudget-dummy-timing-guard');
       const ok = user
         ? await verifyPassword(user.password_hash, password)
@@ -36,7 +39,8 @@ async function authRoutes(app) {
           id: user.id,
           login: user.login,
           role: user.role,
-          themePreference: user.theme_preference
+          themePreference: user.theme_preference,
+          sankeyDetailLevel: user.sankey_detail_level
         }
       };
     }
@@ -50,7 +54,7 @@ async function authRoutes(app) {
 
   app.get('/api/me', async (request) => {
     const user = coreDb.prepare(
-      'SELECT id, login, role, theme_preference, last_login_at FROM users WHERE id = ?'
+      'SELECT id, login, role, theme_preference, sankey_detail_level, last_login_at FROM users WHERE id = ?'
     ).get(request.user.id);
     let households = [];
     if (user.role === 'MEMBER') {
@@ -67,6 +71,7 @@ async function authRoutes(app) {
       login: user.login,
       role: user.role,
       themePreference: user.theme_preference,
+      sankeyDetailLevel: user.sankey_detail_level,
       lastLoginAt: user.last_login_at,
       households
     };
@@ -83,13 +88,24 @@ async function authRoutes(app) {
     return { ok: true };
   });
 
+  app.put('/api/me/sankey-detail-level', async (request, reply) => {
+    const { sankeyDetailLevel } = request.body || {};
+    const valid = ['SUMMARY', 'BALANCED', 'DETAILED'];
+    if (!valid.includes(sankeyDetailLevel)) {
+      reply.code(400);
+      return { error: 'Niveau de détail invalide.' };
+    }
+    coreDb.prepare('UPDATE users SET sankey_detail_level = ? WHERE id = ?').run(sankeyDetailLevel, request.user.id);
+    return { ok: true };
+  });
+
   app.put('/api/me/password', async (request, reply) => {
     const { currentPassword, newPassword } = request.body || {};
     if (!currentPassword || !newPassword || String(newPassword).length < 8) {
       reply.code(400);
       return { error: 'Mot de passe actuel requis, nouveau mot de passe d\'au moins 8 caractères.' };
     }
-    const user = coreDb.prepare('SELECT * FROM users WHERE id = ?').get(request.user.id);
+    const user = /** @type {import('../types').User} */ (/** @type {any} */ (coreDb.prepare('SELECT * FROM users WHERE id = ?').get(request.user.id)));
     const ok = await verifyPassword(user.password_hash, currentPassword);
     if (!ok) {
       reply.code(401);

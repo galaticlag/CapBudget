@@ -1,8 +1,20 @@
+// @ts-check
 'use strict';
 
 const { newId } = require('../util/ids');
 const { db: coreDb } = require('../db/core');
 
+/**
+ * @param {import('node:sqlite').DatabaseSync} householdDb
+ * @param {string} householdId
+ * @param {string} userId
+ * @param {string} action
+ * @param {string} entityType
+ * @param {string | null | undefined} entityId
+ * @param {unknown} [oldValue]
+ * @param {unknown} [newValue]
+ * @returns {void}
+ */
 function logHouseholdAudit(householdDb, householdId, userId, action, entityType, entityId, oldValue, newValue) {
   householdDb.prepare(`
     INSERT INTO household_audit_logs (id, household_id, user_id, action, entity_type, entity_id, old_value, new_value)
@@ -19,6 +31,15 @@ function logHouseholdAudit(householdDb, householdId, userId, action, entityType,
   );
 }
 
+/**
+ * @param {string | null | undefined} userId
+ * @param {string} action
+ * @param {string} entityType
+ * @param {string | null | undefined} entityId
+ * @param {unknown} [oldValue]
+ * @param {unknown} [newValue]
+ * @returns {void}
+ */
 function logGlobalAudit(userId, action, entityType, entityId, oldValue, newValue) {
   coreDb.prepare(`
     INSERT INTO global_audit_logs (id, user_id, action, entity_type, entity_id, old_value, new_value)

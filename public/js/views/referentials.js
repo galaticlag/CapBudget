@@ -50,6 +50,44 @@ function excludeFromDashboardField(name, checked) {
   ]);
 }
 
+async function openReplacementDialog({ title, message, options, preview, confirmLabel = 'Supprimer', cancelLabel = 'Annuler' }) {
+  const dialog = el('dialog', { class: 'modal' });
+  const select = el('select', { name: 'replacement' }, options.map((o) => el('option', { value: o.value }, [o.label])));
+  const previewEl = el('p', { class: 'category-subtle' }, ['Chargement…']);
+  const form = el('form', { method: 'dialog', class: 'panel-body' }, [
+    el('h3', {}, [title]),
+    el('p', {}, [message]),
+    previewEl,
+    labeledField('Remplacement', select),
+    el('div', { class: 'filter-row' }, [
+      el('button', { class: 'ghost-button', value: 'cancel' }, [cancelLabel]),
+      el('button', { class: 'primary-button', value: 'confirm' }, [confirmLabel])
+    ])
+  ]);
+  dialog.appendChild(form);
+  document.body.appendChild(dialog);
+
+  if (preview) {
+    try {
+      const data = await preview();
+      previewEl.textContent = data;
+    } catch (err) {
+      previewEl.textContent = `Impossible de charger le preview: ${err.message}`;
+    }
+  } else {
+    previewEl.remove();
+  }
+
+  dialog.showModal();
+  const result = await new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true });
+  });
+  const chosen = select.value;
+  dialog.remove();
+  if (result !== 'confirm') return null;
+  return chosen;
+}
+
 const TABS = [
   { key: 'accounts', label: 'Comptes' },
   { key: 'cashflows', label: 'Cashflows' },
@@ -159,7 +197,10 @@ async function renderReferentials(root) {
 
   async function renderCategories() {
     const [categories, budgetTypeResult] = await Promise.all([api.get('/api/categories'), api.get('/api/budget-types')]);
+    categories.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
     const budgetTypes = budgetTypeResult.items || budgetTypeResult;
+    const subcategories = await api.get('/api/subcategories');
+    subcategories.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
     body.innerHTML = '';
     body.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Catégories'])]));
     const newBudgetTypeSelect = budgetTypeSelect('budgetTypeId', budgetTypes, '');
@@ -189,13 +230,41 @@ async function renderReferentials(root) {
     body.appendChild(form);
     const list = el('div', { class: 'category-list panel-separator' });
     for (const c of categories) {
+      const replacementOptions = [{ label: 'Non catégorisé', value: '' }];
+      for (const cat of categories) {
+        if (cat.id === c.id) continue;
+        const subs = subcategories.filter((s) => s.category_id === cat.id);
+        if (!subs.length) {
+          replacementOptions.push({ label: `${cat.name} - Non catégorisé`, value: `${cat.id}::` });
+          continue;
+        }
+        for (const sub of subs) {
+          replacementOptions.push({ label: `${cat.name} - ${sub.name}`, value: `${cat.id}::${sub.id}` });
+        }
+      }
+      replacementOptions.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
+      const nameInput = el('input', { name: 'name', placeholder: 'Nom', value: c.name, required: 'required' });
       const editRowFields = [
+        labeledField('Nom', nameInput),
         labeledField('Icône', iconSelect('icon', c.icon || '')),
         labeledField('Type de budget (pour les dépenses)', budgetTypeSelect('budgetTypeId', budgetTypes, c.budget_type_id || ''))
       ];
       editRowFields.push(excludeFromDashboardField('excludeFromDashboard', !!c.exclude_from_dashboard));
       const editRow = el('div', { class: 'filter-row' }, editRowFields);
       if (!c.is_system) {
+        nameInput.addEventListener('change', async (e) => {
+          try {
+            const nextName = String(e.target.value || '').trim();
+            if (!nextName) {
+              toast('Nom requis.', { type: 'error' });
+              e.target.value = c.name;
+              return;
+            }
+            await api.put(`/api/categories/${c.id}`, { name: nextName });
+            toast('Nom mis à jour.', { type: 'success' });
+            render();
+          } catch (err) { toast(err.message, { type: 'error' }); }
+        });
         editRow.querySelector('select[name="icon"]').addEventListener('change', async (e) => {
           try {
             await api.put(`/api/categories/${c.id}`, { icon: e.target.value || null });
@@ -228,9 +297,25 @@ async function renderReferentials(root) {
         c.is_system ? el('span', { class: 'chip' }, ['Système']) : el('button', {
           class: 'ghost-button',
           onclick: async () => {
-            if (!confirm('Supprimer cette catégorie ?')) return;
+            const selected = await openReplacementDialog({
+              title: 'Supprimer la catégorie',
+              message: 'Choisis où réaffecter les transactions/règles impactées (par défaut : Non catégorisé).',
+              preview: async () => {
+                const p = await api.get(`/api/categories/${c.id}/delete-preview`);
+                return `${p.impactedTransactions} transaction(s) impactée(s) · ${p.impactedRules} règle(s) impactée(s) · ${p.subcategoriesToDelete} sous-catégorie(s) supprimée(s)`;
+              },
+              options: replacementOptions,
+              confirmLabel: 'Supprimer'
+            });
+            if (selected === null) return;
+            const [replacementCategoryId, replacementSubcategoryId] = (selected || '').split('::');
             try {
-              await api.del(`/api/categories/${c.id}`);
+              await api.del(`/api/categories/${c.id}`, {
+                body: {
+                  replacementCategoryId: replacementCategoryId ? replacementCategoryId : null,
+                  replacementSubcategoryId: replacementSubcategoryId ? replacementSubcategoryId : null
+                }
+              });
               toast('Catégorie supprimée.', { type: 'success' });
               render();
             } catch (err) { toast(err.message, { type: 'error' }); }
@@ -245,10 +330,12 @@ async function renderReferentials(root) {
     const [categories, subcategories, budgetTypeResult] = await Promise.all([
       api.get('/api/categories'), api.get('/api/subcategories'), api.get('/api/budget-types')
     ]);
+    const sortedCategories = categories.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
+    subcategories.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
     const budgetTypes = budgetTypeResult.items || budgetTypeResult;
     body.innerHTML = '';
     body.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Sous-catégories'])]));
-    const categorySelect = el('select', { name: 'categoryId', required: 'required' }, [el('option', { value: '' }, ['Catégorie…']), ...categories.map((c) => el('option', { value: c.id }, [c.name]))]);
+    const categorySelect = el('select', { name: 'categoryId', required: 'required' }, [el('option', { value: '' }, ['Catégorie…']), ...sortedCategories.map((c) => el('option', { value: c.id }, [c.name]))]);
     const newBudgetTypeSelect = budgetTypeSelect('budgetTypeId', budgetTypes, '');
     const form = el('form', { class: 'filter-row' }, [
       categorySelect,
@@ -274,12 +361,33 @@ async function renderReferentials(root) {
     const list = el('div', { class: 'category-list panel-separator' });
     for (const s of subcategories) {
       const cat = categories.find((c) => c.id === s.category_id);
+      const replacementOptions = [{ label: 'Non catégorisé', value: '' }];
+      const siblings = subcategories.filter((sc) => sc.category_id === s.category_id && sc.id !== s.id);
+      for (const sib of siblings) {
+        replacementOptions.push({ label: `${cat ? cat.name : ''} - ${sib.name}`.trim(), value: sib.id });
+      }
+      replacementOptions.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
+      const nameInput = el('input', { name: 'name', placeholder: 'Nom', value: s.name, required: 'required' });
       const editRowFields = [
+        labeledField('Nom', nameInput),
         labeledField('Icône', iconSelect('icon', s.icon || '')),
         labeledField('Type de budget (pour les dépenses)', budgetTypeSelect('budgetTypeId', budgetTypes, s.budget_type_id || ''))
       ];
       const editRow = el('div', { class: 'filter-row' }, editRowFields);
       if (!s.is_system) {
+        nameInput.addEventListener('change', async (e) => {
+          try {
+            const nextName = String(e.target.value || '').trim();
+            if (!nextName) {
+              toast('Nom requis.', { type: 'error' });
+              e.target.value = s.name;
+              return;
+            }
+            await api.put(`/api/subcategories/${s.id}`, { name: nextName });
+            toast('Nom mis à jour.', { type: 'success' });
+            render();
+          } catch (err) { toast(err.message, { type: 'error' }); }
+        });
         editRow.querySelector('select[name="icon"]').addEventListener('change', async (e) => {
           try {
             await api.put(`/api/subcategories/${s.id}`, { icon: e.target.value || null });
@@ -304,9 +412,23 @@ async function renderReferentials(root) {
         s.is_system ? el('span', { class: 'chip' }, ['Système']) : el('button', {
           class: 'ghost-button',
           onclick: async () => {
-            if (!confirm('Supprimer cette sous-catégorie ?')) return;
+            const selected = await openReplacementDialog({
+              title: 'Supprimer la sous-catégorie',
+              message: 'Choisis où réaffecter les transactions/règles impactées (par défaut : Non catégorisé).',
+              preview: async () => {
+                const p = await api.get(`/api/subcategories/${s.id}/delete-preview`);
+                return `${p.impactedTransactions} transaction(s) impactée(s) · ${p.impactedRules} règle(s) impactée(s)`;
+              },
+              options: replacementOptions,
+              confirmLabel: 'Supprimer'
+            });
+            if (selected === null) return;
             try {
-              await api.del(`/api/subcategories/${s.id}`);
+              await api.del(`/api/subcategories/${s.id}`, {
+                body: {
+                  replacementSubcategoryId: selected ? selected : null
+                }
+              });
               toast('Sous-catégorie supprimée.', { type: 'success' });
               render();
             } catch (err) { toast(err.message, { type: 'error' }); }

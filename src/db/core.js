@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const fs = require('node:fs');
@@ -87,10 +88,16 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_memberships_user ON household_memberships(user_id);
   `);
+
+  // Migration guard: add columns introduced after initial release to already-created databases.
+  const userColumns = db.prepare('PRAGMA table_info(users)').all().map((col) => col.name);
+  if (!userColumns.includes('sankey_detail_level')) {
+    db.exec("ALTER TABLE users ADD COLUMN sankey_detail_level TEXT NOT NULL DEFAULT 'BALANCED'");
+  }
 }
 
 function ensureSeedCatalog() {
-  const row = db.prepare('SELECT COUNT(*) AS n FROM global_catalog').get();
+  const row = /** @type {{ n: number }} */ (db.prepare('SELECT COUNT(*) AS n FROM global_catalog').get());
   if (row.n > 0) return;
 
   const insertCat = db.prepare(`

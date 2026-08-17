@@ -37,7 +37,9 @@ function renderTransactionRow(t, ctx) {
   }
 
   function subcategoryOptionsFor(categoryId, selectedId) {
-    const subs = subcategoriesByCategory.get(categoryId) || [];
+    const subs = (subcategoriesByCategory.get(categoryId) || [])
+      .slice()
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
     return [
       el('option', { value: '', selected: !selectedId ? 'selected' : undefined }, ['Sous-catégorie…']),
       ...subs.map((s) => el('option', { value: s.id, selected: s.id === selectedId ? 'selected' : undefined }, [s.name]))
@@ -48,6 +50,8 @@ function renderTransactionRow(t, ctx) {
     onchange: (e) => patch({ subcategoryId: e.target.value || null }, 'Sous-catégorie mise à jour.')
   }, subcategoryOptionsFor(t.category_id, t.subcategory_id));
 
+  const sortedCategories = (categories || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
+
   const categorySelect = el('select', {
     onchange: (e) => {
       const newCategoryId = e.target.value;
@@ -57,7 +61,7 @@ function renderTransactionRow(t, ctx) {
       for (const opt of subcategoryOptionsFor(newCategoryId, null)) subcategorySelect.appendChild(opt);
       patch({ categoryId: newCategoryId, subcategoryId: null }, 'Catégorie mise à jour.');
     }
-  }, categories.map((c) => el('option', { value: c.id, selected: c.id === t.category_id ? 'selected' : undefined }, [c.name])));
+  }, sortedCategories.map((c) => el('option', { value: c.id, selected: c.id === t.category_id ? 'selected' : undefined }, [c.name])));
 
   const category = categoryById.get(t.category_id);
   const budgetType = category && category.budget_type_id ? budgetTypeById.get(category.budget_type_id) : null;

@@ -1,4 +1,7 @@
+// @ts-check
 'use strict';
+
+/** @typedef {import('../types').CategorizationRule} CategorizationRule */
 
 // Basic static guard against catastrophic-backtracking regex patterns (ReDoS):
 // rejects obvious nested-quantifier constructs (e.g. "(a+)+", "(a*){2,}") and
@@ -8,6 +11,10 @@
 const RISKY_REGEX_PATTERN = /\([^()]*[+*][^()]*\)[+*{]/;
 const MAX_PATTERN_LENGTH = 200;
 
+/**
+ * @param {string} pattern
+ * @returns {boolean}
+ */
 function isSafeRegex(pattern) {
   if (String(pattern).length > MAX_PATTERN_LENGTH) return false;
   if (RISKY_REGEX_PATTERN.test(pattern)) return false;
@@ -20,6 +27,12 @@ function isSafeRegex(pattern) {
   }
 }
 
+/**
+ * @param {CategorizationRule['match_type']} matchType
+ * @param {string} value
+ * @param {string} text
+ * @returns {boolean}
+ */
 function testField(matchType, value, text) {
   const haystack = text || '';
   if (matchType === 'CONTAINS') {
@@ -42,6 +55,13 @@ function testField(matchType, value, text) {
 // A rule can be configured to match against any combination of raw label / suggested
 // label / comment at once (checkboxes in the UI) — it matches a transaction as soon as
 // ONE of its enabled fields matches, which is what makes bulk categorization practical.
+/**
+ * @param {import('../types').RuleMatchCriteria} rule
+ * @param {string} rawLabel
+ * @param {string | null} suggestedLabel
+ * @param {string | null} comment
+ * @returns {boolean}
+ */
 function matches(rule, rawLabel, suggestedLabel, comment) {
   const value = String(rule.match_value);
   if (rule.match_raw_label && testField(rule.match_type, value, rawLabel)) return true;
@@ -51,8 +71,18 @@ function matches(rule, rawLabel, suggestedLabel, comment) {
 }
 
 // First-match-wins across active rules, ordered by creation (oldest = highest priority).
+/**
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} rawLabel
+ * @param {string | null} suggestedLabel
+ * @param {string | null} comment
+ * @returns {CategorizationRule | null}
+ */
 function findMatchingRule(db, rawLabel, suggestedLabel, comment) {
-  const rules = db.prepare('SELECT * FROM categorization_rules WHERE is_active = 1 ORDER BY created_at ASC').all();
+  /** @type {CategorizationRule[]} */
+  const rules = /** @type {any} */ (
+    db.prepare('SELECT * FROM categorization_rules WHERE is_active = 1 ORDER BY created_at ASC').all()
+  );
   for (const rule of rules) {
     if (matches(rule, rawLabel, suggestedLabel, comment)) return rule;
   }

@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { buildDashboardSummary, buildBudgetTypeSummary } = require('../services/dashboardService');

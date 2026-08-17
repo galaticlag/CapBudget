@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const crypto = require('node:crypto');
@@ -168,7 +169,7 @@ function evaluateRow(db, householdId, rawLine, delimiter, mapping, rowNumber, { 
   const potentialFromBatch = !potentialFromDb && batchSeen && batchSeen.find((r) =>
     r.accountId === accountId &&
     Math.abs(r.amountCents - amountCents) < 1 &&
-    Math.abs((new Date(r.operationDate) - new Date(operationDate)) / 86400000) <= 3 &&
+    Math.abs((new Date(r.operationDate).getTime() - new Date(operationDate).getTime()) / 86400000) <= 3 &&
     r.label !== label
   );
   const potential = potentialFromDb || potentialFromBatch;
@@ -269,6 +270,12 @@ function resolveDefaultCashflowId(db, householdId) {
 // Rules (deliberately configured by the household) always win. Otherwise, if the CSV
 // itself carries category/subcategory columns, use those (creating the referential
 // entries on the fly in commit mode) before falling back to the generic "Non affectée".
+/**
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} householdId
+ * @param {any} row
+ * @param {{ create?: boolean }} [options]
+ */
 function categorizeRow(db, householdId, row, { create } = {}) {
   const rule = findMatchingRule(db, row.label, row.suggestedLabel, row.comment);
   const nature = rule?.nature || (row.amountCents >= 0 ? 'REVENUE' : 'EXPENSE');

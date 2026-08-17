@@ -1,5 +1,21 @@
+// @ts-check
 'use strict';
 
+/**
+ * @typedef {Object} DashboardFilters
+ * @property {string} [startMonth]
+ * @property {string} [endMonth]
+ * @property {string} [cashflowId]
+ * @property {string} [accountId]
+ * @property {string[]} [categoryIds]
+ * @property {string[]} [subcategoryIds]
+ */
+
+/**
+ * @param {string} [startMonth]
+ * @param {string} [endMonth]
+ * @returns {{ clauses: string[], params: string[] }}
+ */
 function monthRangeClause(startMonth, endMonth) {
   const clauses = [];
   const params = [];
@@ -17,6 +33,10 @@ function monthRangeClause(startMonth, endMonth) {
 // Aggregates ACTIVE, non-TRANSFER transactions into a category > subcategory
 // tree for the cashflow Sankey view. Zero-amount categories/subcategories are
 // dropped entirely (never grouped into an "Autres" bucket), per spec.
+/**
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {DashboardFilters} filters
+ */
 function buildDashboardSummary(db, filters) {
   const clauses = ["t.status = 'ACTIVE'", "t.nature != 'TRANSFER'", "(c.exclude_from_dashboard IS NULL OR c.exclude_from_dashboard = 0)", "t.excluded_from_cashflow = 0"];
   const params = [];
@@ -57,9 +77,10 @@ function buildDashboardSummary(db, filters) {
   `).all(...params);
 
   const totals = { revenueCents: 0, expenseCents: 0 };
+  /** @type {{ REVENUE: Map<string, any>, EXPENSE: Map<string, any> }} */
   const trees = { REVENUE: new Map(), EXPENSE: new Map() };
 
-  for (const row of rows) {
+  for (const row of /** @type {any[]} */ (rows)) {
     if (row.nature !== 'REVENUE' && row.nature !== 'EXPENSE') continue;
     if (row.nature === 'REVENUE') totals.revenueCents += row.amount_cents;
     else totals.expenseCents += row.amount_cents;
@@ -111,6 +132,10 @@ function buildDashboardSummary(db, filters) {
 // Compares the current EXPENSE split across budget types (Besoins essentiels /
 // Envies-Loisirs / Épargne, plus any custom ones) against each type's target
 // percentage, for the dashboard "target vs reality" widget.
+/**
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {DashboardFilters} filters
+ */
 function buildBudgetTypeSummary(db, filters) {
   const clauses = ["t.status = 'ACTIVE'", "t.nature = 'EXPENSE'", "(c.exclude_from_dashboard IS NULL OR c.exclude_from_dashboard = 0)", "t.excluded_from_cashflow = 0"];
   const params = [];
@@ -137,18 +162,20 @@ function buildBudgetTypeSummary(db, filters) {
     GROUP BY c.budget_type_id
   `).all(...params);
 
+  /** @type {Map<string, number>} */
   const amountByBudgetTypeId = new Map();
   let totalExpenseCents = 0;
   let unassignedCents = 0;
-  for (const row of rows) {
+  for (const row of /** @type {any[]} */ (rows)) {
     totalExpenseCents += row.amount_cents;
     if (row.budget_type_id) amountByBudgetTypeId.set(row.budget_type_id, row.amount_cents);
     else unassignedCents += row.amount_cents;
   }
 
-  const budgetTypes = db.prepare(
+  /** @type {import('../types').BudgetType[]} */
+  const budgetTypes = /** @type {any} */ (db.prepare(
     'SELECT * FROM budget_types WHERE is_active = 1 ORDER BY display_order, name'
-  ).all();
+  ).all());
 
   const items = budgetTypes.map((bt) => {
     const amountCents = amountByBudgetTypeId.get(bt.id) || 0;

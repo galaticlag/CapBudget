@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { db: coreDb } = require('../db/core');
@@ -7,12 +8,12 @@ const { logGlobalAudit } = require('../services/auditService');
 
 async function setupRoutes(app) {
   app.get('/api/setup/status', async () => {
-    const { n } = coreDb.prepare('SELECT COUNT(*) AS n FROM users').get();
+    const { n } = /** @type {{ n: number }} */ (coreDb.prepare('SELECT COUNT(*) AS n FROM users').get());
     return { needsSetup: n === 0 };
   });
 
   app.post('/api/setup/admin', async (request, reply) => {
-    const { n } = coreDb.prepare('SELECT COUNT(*) AS n FROM users').get();
+    const { n } = /** @type {{ n: number }} */ (coreDb.prepare('SELECT COUNT(*) AS n FROM users').get());
     if (n > 0) {
       reply.code(403);
       return { error: 'Un compte existe déjà. Le premier démarrage est terminé.' };

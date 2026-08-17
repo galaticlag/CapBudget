@@ -28,6 +28,11 @@ async function renderRules(root) {
     subcategoriesByCategory.get(s.category_id).push(s);
   }
 
+    categories = categories.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
+    for (const [catId, subs] of subcategoriesByCategory.entries()) {
+      subcategoriesByCategory.set(catId, subs.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' })));
+    }
+
   function subcategoryOptionsFor(categoryId) {
     const subs = subcategoriesByCategory.get(categoryId) || [];
     return [

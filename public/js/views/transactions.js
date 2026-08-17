@@ -46,6 +46,9 @@ async function renderTransactions(root) {
     toast(err.message, { type: 'error' });
   }
 
+  const byNameFr = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' });
+  categories = categories.slice().sort(byNameFr);
+
   const budgetTypeById = new Map((budgetTypes.items || budgetTypes).map((bt) => [bt.id, bt]));
   const categoryById = new Map(categories.map((c) => [c.id, c]));
   const accountById = new Map(accounts.map((a) => [a.id, a]));
@@ -62,30 +65,65 @@ async function renderTransactions(root) {
 
   function buildFilterPanel() {
     filterPanel.innerHTML = '';
-    filterPanel.appendChild(el('div', { class: 'filter-row' }, [
-      el('input', { type: 'month', value: filters.startMonth, placeholder: 'Début', onchange: (e) => { filters.startMonth = e.target.value; loadResults(); } }),
-      el('input', { type: 'month', value: filters.endMonth, placeholder: 'Fin', onchange: (e) => { filters.endMonth = e.target.value; loadResults(); } }),
-      el('select', { onchange: (e) => { filters.nature = e.target.value; loadResults(); } }, [
-        el('option', { value: '', selected: filters.nature === '' ? 'selected' : undefined }, ['Toutes natures']),
-        el('option', { value: 'REVENUE', selected: filters.nature === 'REVENUE' ? 'selected' : undefined }, ['Revenu']),
-        el('option', { value: 'EXPENSE', selected: filters.nature === 'EXPENSE' ? 'selected' : undefined }, ['Dépense']),
-        el('option', { value: 'TRANSFER', selected: filters.nature === 'TRANSFER' ? 'selected' : undefined }, ['Virement'])
-      ]),
-      el('select', { onchange: (e) => { filters.categoryId = e.target.value; loadResults(); } }, [
-        el('option', { value: '', selected: filters.categoryId === '' ? 'selected' : undefined }, ['Toutes catégories']),
-        ...categories.map((c) => el('option', { value: c.id, selected: c.id === filters.categoryId ? 'selected' : undefined }, [c.name]))
-      ]),
-      el('select', { onchange: (e) => { filters.status = e.target.value; loadResults(); } }, [
-        el('option', { value: 'ACTIVE', selected: filters.status === 'ACTIVE' ? 'selected' : undefined }, ['Actives']),
-        el('option', { value: 'ARCHIVED', selected: filters.status === 'ARCHIVED' ? 'selected' : undefined }, ['Archivées'])
-      ]),
-      el('input', { type: 'search', placeholder: 'Recherche libre…', value: filters.search, oninput: debounce((e) => { filters.search = e.target.value; loadResults(); }, 350) })
-    ]));
-  }
+    const form = el('form', { class: 'filter-row' });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      loadResults();
+    });
 
-  function debounce(fn, wait) {
-    let timer;
-    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), wait); };
+    const searchInput = el('input', {
+      type: 'search',
+      placeholder: 'Recherche libre…',
+      value: filters.search,
+      oninput: (e) => { filters.search = e.target.value; }
+    });
+
+    const natureSelect = el('select', {
+      onchange: (e) => { filters.nature = e.target.value; }
+    }, [
+      el('option', { value: '', selected: filters.nature === '' ? 'selected' : undefined }, ['Toutes natures']),
+      el('option', { value: 'REVENUE', selected: filters.nature === 'REVENUE' ? 'selected' : undefined }, ['Revenu']),
+      el('option', { value: 'EXPENSE', selected: filters.nature === 'EXPENSE' ? 'selected' : undefined }, ['Dépense']),
+      el('option', { value: 'TRANSFER', selected: filters.nature === 'TRANSFER' ? 'selected' : undefined }, ['Virement'])
+    ]);
+
+    const categorySelect = el('select', {
+      onchange: (e) => { filters.categoryId = e.target.value; }
+    }, [
+      el('option', { value: '', selected: filters.categoryId === '' ? 'selected' : undefined }, ['Toutes catégories']),
+      ...categories.map((c) => el('option', { value: c.id, selected: c.id === filters.categoryId ? 'selected' : undefined }, [c.name]))
+    ]);
+
+    const statusSelect = el('select', {
+      onchange: (e) => { filters.status = e.target.value; }
+    }, [
+      el('option', { value: 'ACTIVE', selected: filters.status === 'ACTIVE' ? 'selected' : undefined }, ['Actives']),
+      el('option', { value: 'ARCHIVED', selected: filters.status === 'ARCHIVED' ? 'selected' : undefined }, ['Archivées'])
+    ]);
+
+    const startMonthInput = el('input', {
+      type: 'month',
+      value: filters.startMonth,
+      placeholder: 'Début',
+      onchange: (e) => { filters.startMonth = e.target.value; }
+    });
+
+    const endMonthInput = el('input', {
+      type: 'month',
+      value: filters.endMonth,
+      placeholder: 'Fin',
+      onchange: (e) => { filters.endMonth = e.target.value; }
+    });
+
+    form.appendChild(startMonthInput);
+    form.appendChild(endMonthInput);
+    form.appendChild(natureSelect);
+    form.appendChild(categorySelect);
+    form.appendChild(statusSelect);
+    form.appendChild(searchInput);
+    form.appendChild(el('button', { class: 'primary-button', type: 'submit' }, ['Rechercher']));
+
+    filterPanel.appendChild(form);
   }
 
   addFormPanel.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Nouvelle transaction manuelle'])]));
@@ -145,7 +183,7 @@ async function renderTransactions(root) {
     const list = el('div', { class: 'transaction-list' });
     for (const t of rows) {
       list.appendChild(renderTransactionRow(t, {
-        categories, subcategoriesByCategory, categoryById, budgetTypeById, accountById, cashflows, onChange: loadResults
+        categories, subcategoriesByCategory, categoryById, budgetTypeById, accountById, cashflows, onChange: () => {}
       }));
     }
     tablePanel.appendChild(list);

@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { newId } = require('../util/ids');
@@ -11,7 +12,13 @@ const BUDGET_TYPE_DEFAULTS = [
 
 // Populates a freshly created household database with the mandatory system
 // categories, default budget split and default cashflow required by the spec.
+/**
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} householdId
+ * @returns {void}
+ */
 function seedHouseholdDatabase(db, householdId) {
+  /** @type {Map<string, string>} */
   const budgetTypeIdByKey = new Map();
   const insertBudgetType = db.prepare(`
     INSERT INTO budget_types (id, household_id, name, color, percentage, is_default, is_active, display_order)
@@ -41,7 +48,11 @@ function seedHouseholdDatabase(db, householdId) {
   `).run(newId('sub'), householdId, catId);
 
   // Copy the admin-managed global catalog as a personalizable starting point.
-  const catalogRows = coreDb.prepare('SELECT * FROM global_catalog ORDER BY parent_id IS NOT NULL, display_order').all();
+  /** @type {import('../types').GlobalCatalogEntry[]} */
+  const catalogRows = /** @type {any} */ (
+    coreDb.prepare('SELECT * FROM global_catalog ORDER BY parent_id IS NOT NULL, display_order').all()
+  );
+  /** @type {Map<string, string>} */
   const categoryIdByGlobalId = new Map();
   const insertCategory = db.prepare(`
     INSERT INTO categories (id, household_id, name, kind, color, icon, display_order, is_system, is_active, budget_type_id)

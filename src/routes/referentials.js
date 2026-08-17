@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { newId } = require('../util/ids');
@@ -161,6 +162,19 @@ async function referentialRoutes(app) {
     return { ok: true };
   });
 
+  app.get('/api/categories/:id/delete-preview', async (request, reply) => {
+    const { id } = request.params;
+    const category = request.householdDb.prepare('SELECT * FROM categories WHERE id = ?').get(id);
+    if (!category) {
+      reply.code(404);
+      return { error: 'Catégorie introuvable.' };
+    }
+    const txCount = request.householdDb.prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?').get(id)?.n || 0;
+    const ruleCount = request.householdDb.prepare('SELECT COUNT(*) AS n FROM categorization_rules WHERE category_id = ?').get(id)?.n || 0;
+    const subcategoryCount = request.householdDb.prepare('SELECT COUNT(*) AS n FROM subcategories WHERE category_id = ?').get(id)?.n || 0;
+    return { ok: true, impactedTransactions: txCount, impactedRules: ruleCount, subcategoriesToDelete: subcategoryCount };
+  });
+
   app.delete('/api/categories/:id', async (request, reply) => {
     const { id } = request.params;
     const category = request.householdDb.prepare('SELECT * FROM categories WHERE id = ?').get(id);
@@ -172,17 +186,44 @@ async function referentialRoutes(app) {
       reply.code(409);
       return { error: 'La catégorie système ne peut pas être supprimée.' };
     }
-    const fallbackCategoryId = getSystemCategoryId(request.householdDb);
-    const fallbackSubcategoryId = fallbackCategoryId ? getSystemSubcategoryId(request.householdDb, fallbackCategoryId) : null;
+    const { replacementCategoryId, replacementSubcategoryId } = request.body || {};
+    let targetCategoryId = null;
+    let targetSubcategoryId = null;
+    if (replacementCategoryId) {
+      const targetCategory = request.householdDb.prepare('SELECT * FROM categories WHERE id = ?').get(replacementCategoryId);
+      if (!targetCategory) {
+        reply.code(400);
+        return { error: 'Catégorie de remplacement introuvable.' };
+      }
+      if (targetCategory.id === id) {
+        reply.code(400);
+        return { error: 'La catégorie de remplacement doit être différente.' };
+      }
+      targetCategoryId = targetCategory.id;
+      if (replacementSubcategoryId) {
+        const targetSubcategory = request.householdDb.prepare('SELECT * FROM subcategories WHERE id = ?').get(replacementSubcategoryId);
+        if (!targetSubcategory || targetSubcategory.category_id !== targetCategoryId) {
+          reply.code(400);
+          return { error: 'Sous-catégorie de remplacement invalide.' };
+        }
+        targetSubcategoryId = targetSubcategory.id;
+      } else {
+        targetSubcategoryId = getSystemSubcategoryId(request.householdDb, targetCategoryId) || null;
+      }
+    } else {
+      const fallbackCategoryId = getSystemCategoryId(request.householdDb);
+      targetCategoryId = fallbackCategoryId;
+      targetSubcategoryId = fallbackCategoryId ? (getSystemSubcategoryId(request.householdDb, fallbackCategoryId) || null) : null;
+    }
     request.householdDb.prepare(
       'UPDATE transactions SET category_id = ?, subcategory_id = ? WHERE category_id = ?'
-    ).run(fallbackCategoryId, fallbackSubcategoryId, id);
+    ).run(targetCategoryId, targetSubcategoryId, id);
     request.householdDb.prepare(
       'UPDATE categorization_rules SET category_id = ?, subcategory_id = ? WHERE category_id = ?'
-    ).run(fallbackCategoryId, fallbackSubcategoryId, id);
+    ).run(targetCategoryId, targetSubcategoryId, id);
     request.householdDb.prepare('DELETE FROM subcategories WHERE category_id = ?').run(id);
     request.householdDb.prepare('DELETE FROM categories WHERE id = ?').run(id);
-    logHouseholdAudit(request.householdDb, request.householdId, request.user.id, 'DELETE', 'category', id, category, { reassignedTo: fallbackCategoryId });
+    logHouseholdAudit(request.householdDb, request.householdId, request.user.id, 'DELETE', 'category', id, category, { reassignedTo: targetCategoryId, reassignedSubcategoryTo: targetSubcategoryId });
     return { ok: true };
   });
 
@@ -237,6 +278,18 @@ async function referentialRoutes(app) {
     return { ok: true };
   });
 
+  app.get('/api/subcategories/:id/delete-preview', async (request, reply) => {
+    const { id } = request.params;
+    const subcategory = request.householdDb.prepare('SELECT * FROM subcategories WHERE id = ?').get(id);
+    if (!subcategory) {
+      reply.code(404);
+      return { error: 'Sous-catégorie introuvable.' };
+    }
+    const txCount = request.householdDb.prepare('SELECT COUNT(*) AS n FROM transactions WHERE subcategory_id = ?').get(id)?.n || 0;
+    const ruleCount = request.householdDb.prepare('SELECT COUNT(*) AS n FROM categorization_rules WHERE subcategory_id = ?').get(id)?.n || 0;
+    return { ok: true, impactedTransactions: txCount, impactedRules: ruleCount };
+  });
+
   app.delete('/api/subcategories/:id', async (request, reply) => {
     const { id } = request.params;
     const subcategory = request.householdDb.prepare('SELECT * FROM subcategories WHERE id = ?').get(id);
@@ -248,11 +301,30 @@ async function referentialRoutes(app) {
       reply.code(409);
       return { error: 'La sous-catégorie système ne peut pas être supprimée.' };
     }
-    const fallbackSubcategoryId = getSystemSubcategoryId(request.householdDb, subcategory.category_id);
-    request.householdDb.prepare('UPDATE transactions SET subcategory_id = ? WHERE subcategory_id = ?').run(fallbackSubcategoryId, id);
-    request.householdDb.prepare('UPDATE categorization_rules SET subcategory_id = ? WHERE subcategory_id = ?').run(fallbackSubcategoryId, id);
+    const { replacementSubcategoryId } = request.body || {};
+    let targetSubcategoryId = null;
+    if (replacementSubcategoryId) {
+      const targetSubcategory = request.householdDb.prepare('SELECT * FROM subcategories WHERE id = ?').get(replacementSubcategoryId);
+      if (!targetSubcategory) {
+        reply.code(400);
+        return { error: 'Sous-catégorie de remplacement introuvable.' };
+      }
+      if (targetSubcategory.id === id) {
+        reply.code(400);
+        return { error: 'La sous-catégorie de remplacement doit être différente.' };
+      }
+      if (targetSubcategory.category_id !== subcategory.category_id) {
+        reply.code(400);
+        return { error: 'La sous-catégorie de remplacement doit appartenir à la même catégorie.' };
+      }
+      targetSubcategoryId = targetSubcategory.id;
+    } else {
+      targetSubcategoryId = getSystemSubcategoryId(request.householdDb, subcategory.category_id);
+    }
+    request.householdDb.prepare('UPDATE transactions SET subcategory_id = ? WHERE subcategory_id = ?').run(targetSubcategoryId, id);
+    request.householdDb.prepare('UPDATE categorization_rules SET subcategory_id = ? WHERE subcategory_id = ?').run(targetSubcategoryId, id);
     request.householdDb.prepare('DELETE FROM subcategories WHERE id = ?').run(id);
-    logHouseholdAudit(request.householdDb, request.householdId, request.user.id, 'DELETE', 'subcategory', id, subcategory, { reassignedTo: fallbackSubcategoryId });
+    logHouseholdAudit(request.householdDb, request.householdId, request.user.id, 'DELETE', 'subcategory', id, subcategory, { reassignedTo: targetSubcategoryId });
     return { ok: true };
   });
 
