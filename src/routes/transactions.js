@@ -3,6 +3,8 @@
 
 const { newId } = require('../util/ids');
 const { logHouseholdAudit } = require('../services/auditService');
+const { getBudgetStartDay } = require('../db/household');
+const { budgetMonthToDateRange } = require('../util/budgetMonth');
 
 // A transaction always belongs to a cashflow; fall back to the household's default
 // one whenever the caller doesn't explicitly pick another (or "ignorer sur cashflow").
@@ -13,16 +15,16 @@ function resolveDefaultCashflowId(db, householdId) {
   return defaultCashflow ? defaultCashflow.id : null;
 }
 
-function buildTransactionFilters(query) {
+function buildTransactionFilters(query, budgetStartDay) {
   const clauses = [];
   const params = [];
   if (query.startMonth) {
     clauses.push('operation_date >= ?');
-    params.push(`${query.startMonth}-01`);
+    params.push(budgetMonthToDateRange(query.startMonth, budgetStartDay).startDate);
   }
   if (query.endMonth) {
-    clauses.push("operation_date <= date(?, 'start of month', '+1 month', '-1 day')");
-    params.push(`${query.endMonth}-01`);
+    clauses.push('operation_date <= ?');
+    params.push(budgetMonthToDateRange(query.endMonth, budgetStartDay).endDate);
   }
   if (query.accountId) {
     clauses.push('account_id = ?');
@@ -57,7 +59,7 @@ function buildTransactionFilters(query) {
 
 async function transactionRoutes(app) {
   app.get('/api/transactions', async (request) => {
-    const { where, params } = buildTransactionFilters(request.query);
+    const { where, params } = buildTransactionFilters(request.query, getBudgetStartDay(request.householdDb));
     const limit = Math.min(Number(request.query.limit) || 200, 1000);
     const rows = request.householdDb.prepare(`
       SELECT * FROM transactions ${where} ORDER BY operation_date DESC, created_at DESC LIMIT ?

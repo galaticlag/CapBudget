@@ -4,6 +4,8 @@
 const { newId } = require('../util/ids');
 const { logHouseholdAudit } = require('../services/auditService');
 const { db: coreDb } = require('../db/core');
+const { getBudgetStartDay, setBudgetStartDay } = require('../db/household');
+const { MIN_BUDGET_START_DAY, MAX_BUDGET_START_DAY } = require('../util/budgetMonth');
 
 function getSystemCategoryId(db) {
   const row = db.prepare('SELECT id FROM categories WHERE is_system = 1 LIMIT 1').get();
@@ -490,6 +492,26 @@ async function referentialRoutes(app) {
     coreDb.prepare('UPDATE households SET name = ? WHERE id = ?').run(trimmed, request.householdId);
     logHouseholdAudit(request.householdDb, request.householdId, request.user.id, 'UPDATE', 'household', request.householdId, { name: before }, { name: trimmed });
     return { ok: true, name: trimmed };
+  });
+
+  // Budget month start day: which day of the calendar month the household's "budget
+  // month" begins on (e.g. salaries paid on the last days of the month should count
+  // toward the FOLLOWING budget month rather than the one about to end).
+  app.get('/api/household/settings', async (request) => {
+    return { budgetStartDay: getBudgetStartDay(request.householdDb) };
+  });
+
+  app.put('/api/household/settings', async (request, reply) => {
+    const { budgetStartDay } = request.body || {};
+    const day = Number(budgetStartDay);
+    if (!Number.isInteger(day) || day < MIN_BUDGET_START_DAY || day > MAX_BUDGET_START_DAY) {
+      reply.code(400);
+      return { error: `Jour de d\u00e9but du mois budg\u00e9taire invalide (entre ${MIN_BUDGET_START_DAY} et ${MAX_BUDGET_START_DAY}).` };
+    }
+    const before = getBudgetStartDay(request.householdDb);
+    const saved = setBudgetStartDay(request.householdDb, day);
+    logHouseholdAudit(request.householdDb, request.householdId, request.user.id, 'UPDATE', 'household_settings', request.householdId, { budgetStartDay: before }, { budgetStartDay: saved });
+    return { ok: true, budgetStartDay: saved };
   });
 }
 

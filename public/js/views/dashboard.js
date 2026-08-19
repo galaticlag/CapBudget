@@ -1,8 +1,9 @@
 'use strict';
 
 import { api } from '../api.js';
-import { el, formatCents, currentMonthStr } from '../util.js';
+import { el, formatCents, currentBudgetMonthStr, budgetMonthToDateRange } from '../util.js';
 import { renderSankey } from '../sankey.js';
+import { exportSvgAsPng } from '../sankeyExport.js';
 import { toast } from '../toast.js';
 import { renderTransactionRow } from '../components/transactionRow.js';
 
@@ -96,13 +97,21 @@ function remainingPercentLabel(remainingCents, revenueCents) {
 async function renderDashboard(root, { user } = {}) {
   root.innerHTML = '';
 
+  // Household-configured budget month start day (1 = plain calendar month).
+  // Fetched once up front since it determines the initial period below.
+  let budgetStartDay = 1;
+  try {
+    const settings = await api.get('/api/household/settings');
+    budgetStartDay = Number(settings?.budgetStartDay) || 1;
+  } catch { /* falls back to calendar month */ }
+
   // The persisted default (from user preferences) vs. the level actually applied
   // right now — they only diverge for the current session, until the user
   // explicitly clicks "Définir par défaut" (see the banner below).
   let persistedDetailLevel = user?.sankeyDetailLevel || 'BALANCED';
   const filterState = {
-    startMonth: currentMonthStr(),
-    endMonth: currentMonthStr(),
+    startMonth: currentBudgetMonthStr(budgetStartDay),
+    endMonth: currentBudgetMonthStr(budgetStartDay),
     cashflowId: '',
     activeShortcut: 1,
     monthlyView: false,
@@ -118,8 +127,104 @@ async function renderDashboard(root, { user } = {}) {
   const summaryBudgetGrid = el('div', { class: 'summary-budget-grid' }, [summaryPanel, budgetTypePanel]);
   const detailLevelRow = el('div', { class: 'sankey-detail-level-row' });
   const sankeyDefaultBanner = el('div', { class: 'info-box', style: 'display: none;' });
-  const sankeyPanelTitle = el('div', { class: 'panel-header' }, [
-    el('h2', {}, ['Flux du foyer']),
+
+  // Shared by buildFilters (period pills) AND the export/popin subtitle below —
+  // defined once here rather than duplicated in both places.
+  const monthLabelFr = (monthStr) => {
+    const [y, m] = String(monthStr || '').split('-').map((v) => Number(v));
+    if (!y || !m) return monthStr;
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    return new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(d);
+  };
+  // Internally, `startMonth`/`endMonth` name the calendar month a budget period STARTS
+  // in (e.g. "2026-07" for a 25 juil.–24 août period) — that's what actually drives the
+  // date range. But once budgetStartDay != 1, most of that period's days (and its
+  // salary) fall in the FOLLOWING month, so users think of it as "août", not "juillet".
+  // These two helpers translate only for DISPLAY: shift the label forward one month.
+  const toDisplayMonth = (monthStr) => (budgetStartDay > 1 ? shiftMonthStr(monthStr, 1) : monthStr);
+  const toInternalMonth = (displayMonthStr) => (budgetStartDay > 1 ? shiftMonthStr(displayMonthStr, -1) : displayMonthStr);
+
+  // The exact revenue/expense node data + render options last passed to renderSankey
+  // for the main chart — kept around so the "view large" popin can redraw the same
+  // chart into a bigger container on demand, without refetching or recomputing.
+  let lastSankeyPayload = null;
+
+  function currentSankeySubtitle() {
+    const start = monthLabelFr(toDisplayMonth(filterState.startMonth));
+    const end = monthLabelFr(toDisplayMonth(filterState.endMonth));
+    const span = monthSpanInclusive(filterState.startMonth, filterState.endMonth);
+    const periodPart = span <= 1 ? start : `${start} – ${end}`;
+    const cashflowName = filterState.cashflowId ? cashflows.find((c) => String(c.id) === String(filterState.cashflowId))?.name : null;
+    return cashflowName ? `${periodPart} · ${cashflowName}` : periodPart;
+  }
+
+  async function exportSankeyFrom(container, { toastOnSuccess = true } = {}) {
+    const svgEl = container?.querySelector('svg');
+    if (!svgEl) {
+      toast('Aucun graphique à exporter pour le moment.', { type: 'error' });
+      return;
+    }
+    try {
+      await exportSvgAsPng(svgEl, {
+        filename: `flux-du-foyer_${filterState.startMonth}_${filterState.endMonth}.png`,
+        title: 'Flux du foyer',
+        subtitle: currentSankeySubtitle()
+      });
+      if (toastOnSuccess) toast('✓ Image exportée.', { type: 'success' });
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    }
+  }
+
+  function renderSankeyInto(container) {
+    if (!lastSankeyPayload) return;
+    renderSankey(container, lastSankeyPayload.data, lastSankeyPayload.opts);
+  }
+
+  // "View large" popin: redraws the exact same chart into a bigger dialog instead
+  // of only offering a static zoom, since the sankey itself is interactive (click
+  // to filter transactions, hover to highlight a flow) — those behaviors should
+  // keep working at the larger size too.
+  function openSankeyModal() {
+    const modalContainer = el('div', { class: 'sankey-container sankey-modal-container' });
+    const closeBtn = el('button', {
+      class: 'icon-button', type: 'button', title: 'Fermer', 'aria-label': 'Fermer',
+      onclick: () => dialog.close()
+    }, ['✕']);
+    const downloadBtn = el('button', {
+      class: 'icon-button', type: 'button', title: 'Exporter en image', 'aria-label': 'Exporter en image',
+      onclick: () => exportSankeyFrom(modalContainer)
+    }, ['⬇︎']);
+    const dialog = el('dialog', { class: 'modal sankey-modal' }, [
+      el('div', { class: 'modal-header' }, [
+        el('h3', {}, ['Flux du foyer']),
+        el('div', { class: 'sankey-actions' }, [downloadBtn, closeBtn])
+      ]),
+      modalContainer
+    ]);
+    document.body.appendChild(dialog);
+    const onResize = () => renderSankeyInto(modalContainer);
+    window.addEventListener('resize', onResize);
+    dialog.addEventListener('close', () => {
+      window.removeEventListener('resize', onResize);
+      dialog.remove();
+    }, { once: true });
+    dialog.showModal();
+    renderSankeyInto(modalContainer);
+  }
+
+  const expandSankeyBtn = el('button', {
+    class: 'icon-button', type: 'button', title: 'Afficher en grand', 'aria-label': 'Afficher en grand',
+    onclick: () => openSankeyModal()
+  }, ['⛶']);
+  const downloadSankeyBtn = el('button', {
+    class: 'icon-button', type: 'button', title: 'Exporter en image', 'aria-label': 'Exporter en image',
+    onclick: () => exportSankeyFrom(document.getElementById('sankey-container'))
+  }, ['⬇︎']);
+  const sankeyActions = el('div', { class: 'sankey-actions' }, [expandSankeyBtn, downloadSankeyBtn]);
+  const sankeyTitleRow = el('div', { class: 'sankey-title-row' }, [el('h2', {}, ['Flux du foyer']), sankeyActions]);
+  const sankeyPanelTitle = el('div', { class: 'panel-header sankey-panel-header' }, [
+    sankeyTitleRow,
     detailLevelRow
   ]);
 
@@ -136,6 +241,21 @@ async function renderDashboard(root, { user } = {}) {
           render();
         }
       }, [isDefault ? `${level.label} • Défaut` : level.label]));
+    }
+
+    // Cashflow filter lives right next to the detail-level chips (same row), separated
+    // by a small vertical divider so the two independent chip groups read as distinct.
+    detailLevelRow.appendChild(el('span', { class: 'row-divider', 'aria-hidden': 'true' }));
+    detailLevelRow.appendChild(el('span', { class: 'field-mini-label' }, ['Cashflow']));
+    detailLevelRow.appendChild(el('button', {
+      class: `chip ${filterState.cashflowId === '' ? 'chip-active' : ''}`,
+      onclick: () => { filterState.cashflowId = ''; filterState.sankeyFilter = null; render(); }
+    }, ['Tous']));
+    for (const c of cashflows) {
+      detailLevelRow.appendChild(el('button', {
+        class: `chip ${String(filterState.cashflowId) === String(c.id) ? 'chip-active' : ''}`,
+        onclick: () => { filterState.cashflowId = c.id; filterState.sankeyFilter = null; render(); }
+      }, [c.name]));
     }
   }
 
@@ -210,147 +330,147 @@ async function renderDashboard(root, { user } = {}) {
     filtersBar.innerHTML = '';
     const monthsSelected = monthSpanInclusive(filterState.startMonth, filterState.endMonth);
 
-    const monthLabelFr = (monthStr) => {
-      const [y, m] = String(monthStr || '').split('-').map((v) => Number(v));
-      if (!y || !m) return monthStr;
-      const d = new Date(Date.UTC(y, m - 1, 1));
-      return new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(d);
-    };
-
     const periodSummaryLabel = () => {
-      const start = monthLabelFr(filterState.startMonth);
-      const end = monthLabelFr(filterState.endMonth);
+      const start = monthLabelFr(toDisplayMonth(filterState.startMonth));
+      const end = monthLabelFr(toDisplayMonth(filterState.endMonth));
       const span = monthSpanInclusive(filterState.startMonth, filterState.endMonth);
       if (span <= 1) return `Période sélectionnée : ${start}`;
       return `Période sélectionnée : ${start} à ${end} · ${span} mois`;
     };
 
-    const shortcutRow = el('div', { class: 'filter-row period-shortcuts-row' }, [
-      el('div', { class: 'filter-row-chips' }, [
-        el('span', { class: 'filter-group-label period-inline-label' }, ['Période']),
-        ...MONTH_SHORTCUTS.map((s) => el('button', {
-          class: `chip ${filterState.activeShortcut === s.months ? 'chip-active' : ''}`,
-          onclick: () => {
-            filterState.activeShortcut = s.months;
-            filterState.startMonth = currentMonthStr(-(s.months - 1));
-            filterState.endMonth = currentMonthStr();
-            filterState.sankeyFilter = null;
-            load();
-          }
-        }, [s.label]))
-      ]),
-      el('div', { class: 'period-cashflow' }, [
-        el('label', { class: 'field-mini-label' }, ['Type de cashflow']),
-        el('select', {
-          onchange: (e) => { filterState.cashflowId = e.target.value; filterState.sankeyFilter = null; load(); }
-        }, [
-          el('option', { value: '', selected: filterState.cashflowId === '' ? 'selected' : undefined }, ['Tous les cashflows']),
-          ...cashflows.map((c) => el('option', {
-            value: c.id,
-            selected: String(filterState.cashflowId) === String(c.id) ? 'selected' : undefined
-          }, [c.name]))
-        ])
-      ])
+    // Shift both ends of the period by the same delta, keeping the span (1/2/3/6/12
+    // months) constant — shared by the prev/next nav buttons below.
+    const shiftPeriod = (delta) => {
+      const span = monthSpanInclusive(filterState.startMonth, filterState.endMonth);
+      filterState.activeShortcut = null;
+      filterState.startMonth = shiftMonthStr(filterState.startMonth, delta);
+      filterState.endMonth = shiftMonthStr(filterState.endMonth, delta);
+      if (monthSpanInclusive(filterState.startMonth, filterState.endMonth) !== span) {
+        filterState.endMonth = shiftMonthStr(filterState.startMonth, span - 1);
+      }
+      filterState.sankeyFilter = null;
+      load();
+    };
+
+    // A single month picked shows start == end — showing the same month twice (as a
+    // "range") reads as a bug, so collapse to one pill in that case. The prev/next
+    // chevrons sit directly against the pill(s), grouped in one bordered control, so
+    // the whole thing reads as "one navigator" instead of loose floating arrows.
+    const singleMonth = monthsSelected === 1;
+    const monthPill = (monthStr, title, onPick) => el('label', { class: 'period-month-button', title }, [
+      el('span', {}, [monthLabelFr(toDisplayMonth(monthStr))]),
+      el('span', { class: 'calendar-icon' }, ['📅']),
+      el('input', {
+        class: 'period-month-input',
+        type: 'month',
+        value: toDisplayMonth(monthStr),
+        onchange: (e) => { filterState.activeShortcut = null; onPick(toInternalMonth(e.target.value)); filterState.sankeyFilter = null; load(); }
+      })
     ]);
 
-    const navRow = el('div', { class: 'filter-row period-nav-row' }, [
+    const periodNavGroup = el('div', { class: 'period-nav-group' }, [
       el('button', {
-        class: 'ghost-button nav-arrow',
-        title: 'Décaler la période vers le passé',
-        'aria-label': 'Décaler la période vers le passé',
-        onclick: () => {
-          const span = monthSpanInclusive(filterState.startMonth, filterState.endMonth);
-          filterState.activeShortcut = null;
-          filterState.startMonth = shiftMonthStr(filterState.startMonth, -1);
-          filterState.endMonth = shiftMonthStr(filterState.endMonth, -1);
-          if (monthSpanInclusive(filterState.startMonth, filterState.endMonth) !== span) {
-            filterState.endMonth = shiftMonthStr(filterState.startMonth, span - 1);
-          }
-          filterState.sankeyFilter = null;
-          load();
-        }
-      }, ['←']),
-      el('div', { class: 'period-months' }, [
-        el('label', { class: 'period-month-button', title: 'Mois de début' }, [
-          el('span', {}, [monthLabelFr(filterState.startMonth)]),
-          el('span', { class: 'calendar-icon' }, ['📅']),
-          el('input', {
-            class: 'period-month-input',
-            type: 'month',
-            value: filterState.startMonth,
-            onchange: (e) => { filterState.activeShortcut = null; filterState.startMonth = e.target.value; filterState.sankeyFilter = null; load(); }
-          })
-        ]),
-        el('span', { class: 'period-arrow' }, ['→']),
-        el('label', { class: 'period-month-button', title: 'Mois de fin' }, [
-          el('span', {}, [monthLabelFr(filterState.endMonth)]),
-          el('span', { class: 'calendar-icon' }, ['📅']),
-          el('input', {
-            class: 'period-month-input',
-            type: 'month',
-            value: filterState.endMonth,
-            onchange: (e) => { filterState.activeShortcut = null; filterState.endMonth = e.target.value; filterState.sankeyFilter = null; load(); }
-          })
-        ])
+        class: 'nav-arrow',
+        type: 'button',
+        title: 'Période précédente',
+        'aria-label': 'Période précédente',
+        onclick: () => shiftPeriod(-1)
+      }, ['‹']),
+      el('div', { class: 'period-months' }, singleMonth ? [
+        monthPill(filterState.startMonth, 'Mois affiché', (v) => { filterState.startMonth = v; filterState.endMonth = v; })
+      ] : [
+        monthPill(filterState.startMonth, 'Mois de début', (v) => { filterState.startMonth = v; }),
+        el('span', { class: 'period-range-sep', 'aria-hidden': 'true' }, ['–']),
+        monthPill(filterState.endMonth, 'Mois de fin', (v) => { filterState.endMonth = v; })
       ]),
       el('button', {
-        class: 'ghost-button nav-arrow',
-        title: 'Décaler la période vers le futur',
-        'aria-label': 'Décaler la période vers le futur',
-        onclick: () => {
-          const span = monthSpanInclusive(filterState.startMonth, filterState.endMonth);
-          filterState.activeShortcut = null;
-          filterState.startMonth = shiftMonthStr(filterState.startMonth, 1);
-          filterState.endMonth = shiftMonthStr(filterState.endMonth, 1);
-          if (monthSpanInclusive(filterState.startMonth, filterState.endMonth) !== span) {
-            filterState.endMonth = shiftMonthStr(filterState.startMonth, span - 1);
-          }
-          filterState.sankeyFilter = null;
-          load();
-        }
-      }, ['→'])
+        class: 'nav-arrow',
+        type: 'button',
+        title: 'Période suivante',
+        'aria-label': 'Période suivante',
+        onclick: () => shiftPeriod(1)
+      }, ['›'])
     ]);
 
+    // Everything about "which period am I looking at" lives on one compact row: the
+    // month-count shortcuts, the grouped prev/pill(s)/next navigator, the
+    // budget-month info icon (kept directly next to the navigator it explains), and
+    // — only for a multi-month period — the "moyenne mensuelle" ON/OFF switch with
+    // its own info icon, set apart by a divider since it's a separate concern.
     const monthlyAllowed = monthsSelected > 1;
     if (!monthlyAllowed && filterState.monthlyView) filterState.monthlyView = false;
+
+    const infoTooltip = (label, content) => el('span', { class: 'tooltip' }, [
+      el('button', {
+        class: 'info-icon',
+        type: 'button',
+        'aria-label': label,
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const tip = e.currentTarget.closest('.tooltip');
+          tip?.classList.toggle('open');
+        }
+      }, ['i']),
+      el('span', { class: 'tooltip-content' }, [content])
+    ]);
+
+    const budgetMonthInfo = budgetStartDay === 1 ? null : infoTooltip(
+      'Informations sur le mois budgétaire',
+      (() => {
+        const { startDate } = budgetMonthToDateRange(filterState.startMonth, budgetStartDay);
+        const { endDate } = budgetMonthToDateRange(filterState.endMonth, budgetStartDay);
+        const fmt = (iso) => new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${iso}T00:00:00Z`));
+        return `Du ${fmt(startDate)} au ${fmt(endDate)} — le mois budgétaire démarre le ${budgetStartDay} du mois précédent.`;
+      })()
+    );
+
+    // ON/OFF switch: track color mirrors the app's own chip on/off colors
+    // (primary blue when active, neutral when not) so it reads as the same
+    // "selected vs. not" language as every chip, plus a ✓/✕ glyph on the knob so
+    // the state is legible without relying on color alone.
+    const monthlyToggleGroup = !monthlyAllowed ? null : el('div', { class: 'monthly-toggle-group' }, [
+      el('span', { class: 'monthly-toggle-label' }, ['Moyenne mensuelle']),
+      el('button', {
+        type: 'button',
+        class: `toggle-switch ${filterState.monthlyView ? 'toggle-switch-on' : ''}`,
+        role: 'switch',
+        'aria-checked': String(!!filterState.monthlyView),
+        'aria-label': 'Activer la moyenne mensuelle',
+        onclick: () => { filterState.monthlyView = !filterState.monthlyView; load(); }
+      }, [
+        el('span', { class: 'toggle-switch-knob' }, [filterState.monthlyView ? '✓' : '✕'])
+      ]),
+      infoTooltip(
+        'Informations sur la moyenne mensuelle',
+        `Divise chaque montant par ${monthsSelected} (nombre de mois sélectionnés) pour comparer plus facilement une période longue à une période courte.`
+      )
+    ]);
+
+    const periodRow = el('div', { class: 'filter-row period-row-combined' }, [
+      el('span', { class: 'filter-group-label period-inline-label' }, ['Période']),
+      ...MONTH_SHORTCUTS.map((s) => el('button', {
+        class: `chip ${filterState.activeShortcut === s.months ? 'chip-active' : ''}`,
+        onclick: () => {
+          filterState.activeShortcut = s.months;
+          filterState.startMonth = currentBudgetMonthStr(budgetStartDay, -(s.months - 1));
+          filterState.endMonth = currentBudgetMonthStr(budgetStartDay);
+          filterState.sankeyFilter = null;
+          load();
+        }
+      }, [s.label])),
+      periodNavGroup,
+      budgetMonthInfo,
+      ...(monthlyToggleGroup ? [el('span', { class: 'row-divider', 'aria-hidden': 'true' }), monthlyToggleGroup] : [])
+    ].filter(Boolean));
 
     // Single-month case is already obvious from the pill above — only spell out
     // the range as text when a multi-month span needs the extra clarity.
     const periodSummary = !monthlyAllowed ? null : el('div', { class: 'transaction-sub period-summary' }, [periodSummaryLabel()]);
 
-    const monthlyRow = !monthlyAllowed ? null : el('div', { class: 'filter-row monthly-row' }, [
-      el('div', { class: 'monthly-left' }, [
-        el('span', {}, ['Afficher une moyenne mensuelle']),
-        el('span', { class: 'tooltip' }, [
-          el('button', {
-            class: 'info-icon',
-            type: 'button',
-            'aria-label': 'Informations',
-            onclick: (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const tip = e.currentTarget.closest('.tooltip');
-              tip?.classList.toggle('open');
-            }
-          }, ['i']),
-          el('span', { class: 'tooltip-content' }, [`Les montants sont divisés par ${monthsSelected} mois pour faciliter la comparaison.`])
-        ])
-      ]),
-      el('button', {
-        type: 'button',
-        class: `toggle-chip ${filterState.monthlyView ? 'active' : ''}`,
-        onclick: () => { filterState.monthlyView = !filterState.monthlyView; load(); }
-      }, [
-        el('span', { class: 'toggle-pill', 'aria-hidden': 'true' }),
-        el('span', { class: 'toggle-text' }, [filterState.monthlyView ? 'ON' : 'OFF'])
-      ])
-    ]);
-
     const stack = el('div', { class: 'stack-form' }, [
-      shortcutRow,
-      navRow,
-      periodSummary,
-      monthlyRow
+      periodRow,
+      periodSummary
     ].filter(Boolean));
 
     // Close tooltip when clicking elsewhere in the filters.
@@ -532,28 +652,32 @@ async function renderDashboard(root, { user } = {}) {
     if (filterState.sankeyDetailLevel === 'SUMMARY') expenseNodes = stripSubcategories(expenseNodes);
 
     const container = document.getElementById('sankey-container');
-    renderSankey(container, { revenue: revenueNodes, expense: expenseNodes }, {
-      formatValue: (v, side) => {
-        if (!filterState.hideAmounts) return formatCents(v);
-        // Privacy mode: revenue's own sum is its 100% base, expense's own sum is its
-        // 100% base (kept separate — the two are rarely perfectly balanced).
-        const sideTotal = side === 'EXPENSE' ? data.totals.expenseCents : data.totals.revenueCents;
-        return percentLabel(v, sideTotal);
-      },
-      onNodeClick: (ref) => {
-        // Filters the transaction list below without touching/re-rendering the sankey itself.
-        if (ref.subcategoryId) {
-          const sub = subcategoriesByCategory.get(ref.categoryId)?.find((s) => s.id === ref.subcategoryId);
-          filterState.sankeyFilter = { subcategoryId: ref.subcategoryId, label: sub ? sub.name : 'Sous-catégorie' };
-        } else if (ref.categoryId) {
-          const cat = categoryById.get(ref.categoryId);
-          filterState.sankeyFilter = { categoryId: ref.categoryId, label: cat ? cat.name : 'Catégorie' };
-        } else {
-          filterState.sankeyFilter = null;
+    lastSankeyPayload = {
+      data: { revenue: revenueNodes, expense: expenseNodes },
+      opts: {
+        formatValue: (v, side) => {
+          if (!filterState.hideAmounts) return formatCents(v);
+          // Privacy mode: revenue's own sum is its 100% base, expense's own sum is its
+          // 100% base (kept separate — the two are rarely perfectly balanced).
+          const sideTotal = side === 'EXPENSE' ? data.totals.expenseCents : data.totals.revenueCents;
+          return percentLabel(v, sideTotal);
+        },
+        onNodeClick: (ref) => {
+          // Filters the transaction list below without touching/re-rendering the sankey itself.
+          if (ref.subcategoryId) {
+            const sub = subcategoriesByCategory.get(ref.categoryId)?.find((s) => s.id === ref.subcategoryId);
+            filterState.sankeyFilter = { subcategoryId: ref.subcategoryId, label: sub ? sub.name : 'Sous-catégorie' };
+          } else if (ref.categoryId) {
+            const cat = categoryById.get(ref.categoryId);
+            filterState.sankeyFilter = { categoryId: ref.categoryId, label: cat ? cat.name : 'Catégorie' };
+          } else {
+            filterState.sankeyFilter = null;
+          }
+          renderTransactionsPanel();
         }
-        renderTransactionsPanel();
       }
-    });
+    };
+    renderSankeyInto(container);
 
     await renderTransactionsPanel();
   }

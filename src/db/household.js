@@ -7,6 +7,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { householdsDir } = require('../config');
 const { newId } = require('../util/ids');
 const { db: coreDb } = require('./core');
+const { clampBudgetStartDay } = require('../util/budgetMonth');
 
 fs.mkdirSync(householdsDir, { recursive: true });
 
@@ -323,4 +324,25 @@ function deleteHouseholdDatabase(householdId, databaseKey) {
   }
 }
 
-module.exports = { getHouseholdDb, createHouseholdDatabase, deleteHouseholdDatabase, closeHouseholdConnection };
+const BUDGET_START_DAY_KEY = 'budget_start_day';
+
+/** @param {import('node:sqlite').DatabaseSync} db */
+function getBudgetStartDay(db) {
+  const row = db.prepare('SELECT value FROM household_settings WHERE key = ?').get(BUDGET_START_DAY_KEY);
+  return row ? clampBudgetStartDay(/** @type {any} */ (row).value) : 1;
+}
+
+/**
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {number|string} day
+ */
+function setBudgetStartDay(db, day) {
+  const clamped = clampBudgetStartDay(day);
+  db.prepare(`
+    INSERT INTO household_settings (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(BUDGET_START_DAY_KEY, String(clamped));
+  return clamped;
+}
+
+module.exports = { getHouseholdDb, createHouseholdDatabase, deleteHouseholdDatabase, closeHouseholdConnection, getBudgetStartDay, setBudgetStartDay };

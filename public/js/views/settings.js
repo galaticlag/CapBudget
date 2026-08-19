@@ -15,10 +15,11 @@ const THEME_OPTIONS = [
 async function renderSettings(root, user) {
   root.innerHTML = '';
   const themePanel = el('div', { class: 'panel' });
+  const budgetMonthPanel = el('div', { class: 'panel' });
   const passwordPanel = el('div', { class: 'panel' });
   const sessionsPanel = el('div', { class: 'panel' });
   const backupPanel = el('div', { class: 'panel' });
-  root.appendChild(el('div', { class: 'dashboard' }, [themePanel, passwordPanel, sessionsPanel, backupPanel]));
+  root.appendChild(el('div', { class: 'dashboard' }, [themePanel, budgetMonthPanel, passwordPanel, sessionsPanel, backupPanel]));
 
   themePanel.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Apparence'])]));
   const themeRow = el('div', { class: 'filter-row' }, THEME_OPTIONS.map((opt) => el('button', {
@@ -34,6 +35,39 @@ async function renderSettings(root, user) {
     }
   }, [opt.label])));
   themePanel.appendChild(themeRow);
+
+  budgetMonthPanel.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Mois budgétaire'])]));
+  budgetMonthPanel.appendChild(el('p', { class: 'field-hint' }, [
+    'Jour du mois à partir duquel démarre votre période budgétaire. Par défaut (1), le mois ' +
+    'budgétaire correspond au mois civil. Si votre salaire est versé en fin de mois (par ' +
+    'exemple le 28), le compter dès le 1er du mois suivant comme "nouveau mois" est trompeur : ' +
+    'vous vivez en réalité sur ce salaire jusqu\u2019au mois suivant. Choisissez un jour de ' +
+    'départ proche de votre date de versement pour que le mois budgétaire corresponde à votre ' +
+    'réalité (ex. le 28 août au 27 septembre plutôt que le 1er au 30 septembre).'
+  ]));
+  let budgetStartDay = 1;
+  try {
+    const settings = await api.get('/api/household/settings');
+    budgetStartDay = Number(settings?.budgetStartDay) || 1;
+  } catch (err) { toast(err.message, { type: 'error' }); }
+  const budgetDaySelect = el('select', {}, Array.from({ length: 28 }, (_, i) => i + 1).map((day) => el('option', {
+    value: String(day),
+    selected: day === budgetStartDay ? 'selected' : undefined
+  }, [String(day)])));
+  const budgetMonthForm = el('form', { class: 'stack-form' }, [
+    el('label', { class: 'field-mini-label' }, ['Jour de début du mois budgétaire']),
+    budgetDaySelect,
+    el('button', { class: 'primary-button', type: 'submit' }, ['Enregistrer'])
+  ]);
+  budgetMonthForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const { budgetStartDay: saved } = await api.put('/api/household/settings', { budgetStartDay: Number(budgetDaySelect.value) });
+      budgetStartDay = saved;
+      toast('Mois budgétaire mis à jour.', { type: 'success' });
+    } catch (err) { toast(err.message, { type: 'error' }); }
+  });
+  budgetMonthPanel.appendChild(budgetMonthForm);
 
   passwordPanel.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Changer le mot de passe'])]));
   const pwForm = el('form', { class: 'stack-form' }, [

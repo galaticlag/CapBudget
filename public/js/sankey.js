@@ -29,10 +29,17 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
   const EXTRA_MARGIN = 24;
   const hasSubcategoryDetail = revenue.some((c) => (c.subcategories || []).some((s) => s.amountCents > 0))
     || expense.some((c) => (c.subcategories || []).some((s) => s.amountCents > 0));
-  const maxNodesInColumn = Math.max(1,
-    revenue.reduce((sum, c) => sum + 1 + ((c.subcategories || []).filter((s) => s.amountCents > 0).length || 0), 0),
-    expense.reduce((sum, c) => sum + 1 + ((c.subcategories || []).filter((s) => s.amountCents > 0).length || 0), 0)
-  );
+  // Categories and their subcategories render in two SEPARATE columns (e.g. "expcat"
+  // vs "expsub"), never stacked together in one — so the canvas height only needs to
+  // fit whichever single column has the most rows, not categories+subcategories summed
+  // (that previously sized the canvas for a column ~2x taller than any real one,
+  // leaving a large empty gap above/below the actual diagram).
+  const countPositive = (c) => (c.amountCents > 0 ? 1 : 0);
+  const revCatCount = revenue.reduce((sum, c) => sum + countPositive(c), 0);
+  const revSubCount = revenue.reduce((sum, c) => sum + (c.subcategories || []).filter((s) => s.amountCents > 0).length, 0);
+  const expCatCount = expense.reduce((sum, c) => sum + countPositive(c), 0);
+  const expSubCount = expense.reduce((sum, c) => sum + (c.subcategories || []).filter((s) => s.amountCents > 0).length, 0);
+  const maxNodesInColumn = Math.max(1, revCatCount, revSubCount, expCatCount, expSubCount);
   const nodePadding = hasSubcategoryDetail ? DETAIL_PADDING : MAX_PADDING;
   // May grow further below if a low-value category has more subcategories than
   // its value-proportional share of the column can comfortably fit.
@@ -193,6 +200,13 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
   const width = compactMode
     ? Math.max(rawWidth, 360)
     : (rawWidth < 640 ? 640 : Math.max(rawWidth, 360));
+  // Shared top inset for the layout extent AND the category re-stack anchor below —
+  // d3-sankey vertically CENTERS a column that has fewer/smaller rows than the
+  // tallest column in the diagram (e.g. 12 expense categories vs. 32 expense
+  // subcategories sharing the same extent height), which left a large empty gap
+  // above the shorter columns. Anchoring the re-stack to this fixed inset instead of
+  // that column's own (centered) starting position removes the gap.
+  const TOP_INSET = 16;
 
   // Keep a constant visual separation between rows by tuning the node padding
   // to the available height and the maximum node count in any column.
@@ -234,7 +248,7 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     // roles that actually have nodes get a column, so this stays correct whether
     // only one side (or neither) has subcategory detail.
     .nodeAlign((d) => roleDepth.get(roleOf(d.id)))
-    .extent([[8, 16], [width - 8, height - 16]]);
+    .extent([[8, TOP_INSET], [width - 8, height - 16]]);
 
   const graph = sankeyLayout({
     nodes: nodes.map((n, i) => ({ ...n, index: i })),
@@ -252,7 +266,7 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
   for (const role of ['revcat', 'expcat']) {
     const catNodes = graph.nodes.filter((n) => roleOf(n.id) === role).sort((a, b) => a.y0 - b.y0);
     if (catNodes.length === 0) continue;
-    let y = catNodes[0].y0;
+    let y = TOP_INSET;
     for (const cat of catNodes) {
       const childCount = (parentChildren.get(cat.index) || []).length;
       const naturalHeight = cat.y1 - cat.y0;
@@ -391,10 +405,21 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     .attr('height', height)
     .attr('viewBox', `0 0 ${width} ${height}`);
 
-  svg.append('g').attr('class', 'sankey-links')
+  // Soft drop-shadow so each node reads as a small "glass" bar floating above the
+  // links rather than a flat rectangle — a light, low-spread shadow keeps it
+  // subtle at every zoom level instead of a heavy/cartoonish glow.
+  svg.append('defs').append('filter')
+    .attr('id', 'sankeyNodeShadow')
+    .attr('x', '-60%').attr('y', '-60%').attr('width', '220%').attr('height', '220%')
+    .append('feDropShadow')
+    .attr('dx', 0).attr('dy', 1.5).attr('stdDeviation', 2.5)
+    .attr('flood-color', 'rgba(15, 23, 42, 0.35)');
+
+  const linkPaths = svg.append('g').attr('class', 'sankey-links')
     .selectAll('path')
     .data(graph.links)
     .join('path')
+    .attr('class', 'sankey-link')
     .attr('d', d3.sankeyLinkHorizontal())
     // Color the flow by whichever endpoint is an actual category, not the neutral
     // center node — otherwise every link leaving the center (the whole expense side
@@ -402,11 +427,16 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     .attr('stroke', (d) => (d.source.id === '__center__' ? d.target.color : d.source.color) || '#94a3b8')
     .attr('stroke-opacity', 0.45)
     .attr('stroke-width', (d) => Math.max(2, d.width))
+    .attr('stroke-linecap', 'round')
     .attr('fill', 'none')
-    .style('cursor', 'pointer')
-    .append('title')
+    .style('cursor', 'pointer');
+
+  linkPaths.append('title')
     .text((d) => `${d.source.name || 'Budget'} → ${d.target.name || 'Budget'} : ${formatValue ? formatValue(d.raw, d.ref?.side) : d.raw}`);
 
+  // A ribbon is often only a few px thin — the real <path> is too thin a hit target
+  // to hover/click reliably, so a wider transparent twin (never painted) captures
+  // pointer events instead and highlights/forwards clicks to the real, visible link.
   svg.selectAll('path.sankey-link-hit')
     .data(graph.links)
     .join('path')
@@ -416,6 +446,14 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     .attr('stroke-width', (d) => Math.max(8, d.width))
     .attr('fill', 'none')
     .style('cursor', onNodeClick ? 'pointer' : 'default')
+    .on('mouseenter', (event, d) => {
+      const i = graph.links.indexOf(d);
+      linkPaths.nodes()[i]?.classList.add('sankey-link-active');
+    })
+    .on('mouseleave', (event, d) => {
+      const i = graph.links.indexOf(d);
+      linkPaths.nodes()[i]?.classList.remove('sankey-link-active');
+    })
     .on('click', (event, d) => {
       if (onNodeClick && d.ref) onNodeClick(d.ref);
     });
@@ -437,10 +475,14 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     });
 
   nodeGroup.append('rect')
+    .attr('class', 'sankey-node-rect')
     .attr('width', (d) => d.x1 - d.x0)
     .attr('height', (d) => Math.max(3, d.y1 - d.y0))
     .attr('fill', (d) => d.color || '#94a3b8')
-    .attr('rx', 4);
+    .attr('stroke', 'rgba(255, 255, 255, 0.45)')
+    .attr('stroke-width', 1)
+    .attr('rx', 5)
+    .style('filter', 'url(#sankeyNodeShadow)');
 
   // Categories now keep their own right-sized row (grown to fit children if
   // needed, see the restack pass above) instead of being stretched arbitrarily to

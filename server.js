@@ -96,6 +96,17 @@ async function start() {
 module.exports = { app, buildApp, start };
 
 if (require.main === module) {
+  // Without these, an uncaught exception/rejection kills the process silently
+  // (stack trace only goes to stderr, which isn't captured by our logger).
+  process.on('uncaughtException', (err) => {
+    app.log.error({ err }, 'uncaughtException, shutting down');
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason) => {
+    app.log.error({ err: reason }, 'unhandledRejection, shutting down');
+    process.exit(1);
+  });
+
   start().catch((err) => {
     app.log.error(err);
     process.exit(1);

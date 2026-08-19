@@ -1,10 +1,13 @@
 // @ts-check
 'use strict';
 
+const { budgetMonthToDateRange } = require('../util/budgetMonth');
+
 /**
  * @typedef {Object} DashboardFilters
  * @property {string} [startMonth]
  * @property {string} [endMonth]
+ * @property {number} [budgetStartDay]
  * @property {string} [cashflowId]
  * @property {string} [accountId]
  * @property {string[]} [categoryIds]
@@ -14,18 +17,19 @@
 /**
  * @param {string} [startMonth]
  * @param {string} [endMonth]
+ * @param {number} [budgetStartDay]
  * @returns {{ clauses: string[], params: string[] }}
  */
-function monthRangeClause(startMonth, endMonth) {
+function monthRangeClause(startMonth, endMonth, budgetStartDay) {
   const clauses = [];
   const params = [];
   if (startMonth) {
     clauses.push('t.operation_date >= ?');
-    params.push(`${startMonth}-01`);
+    params.push(budgetMonthToDateRange(startMonth, budgetStartDay).startDate);
   }
   if (endMonth) {
-    clauses.push("t.operation_date <= date(?, 'start of month', '+1 month', '-1 day')");
-    params.push(`${endMonth}-01`);
+    clauses.push('t.operation_date <= ?');
+    params.push(budgetMonthToDateRange(endMonth, budgetStartDay).endDate);
   }
   return { clauses, params };
 }
@@ -41,7 +45,7 @@ function buildDashboardSummary(db, filters) {
   const clauses = ["t.status = 'ACTIVE'", "t.nature != 'TRANSFER'", "(c.exclude_from_dashboard IS NULL OR c.exclude_from_dashboard = 0)", "t.excluded_from_cashflow = 0"];
   const params = [];
 
-  const { clauses: monthClauses, params: monthParams } = monthRangeClause(filters.startMonth, filters.endMonth);
+  const { clauses: monthClauses, params: monthParams } = monthRangeClause(filters.startMonth, filters.endMonth, filters.budgetStartDay);
   clauses.push(...monthClauses);
   params.push(...monthParams);
 
@@ -140,7 +144,7 @@ function buildBudgetTypeSummary(db, filters) {
   const clauses = ["t.status = 'ACTIVE'", "t.nature = 'EXPENSE'", "(c.exclude_from_dashboard IS NULL OR c.exclude_from_dashboard = 0)", "t.excluded_from_cashflow = 0"];
   const params = [];
 
-  const { clauses: monthClauses, params: monthParams } = monthRangeClause(filters.startMonth, filters.endMonth);
+  const { clauses: monthClauses, params: monthParams } = monthRangeClause(filters.startMonth, filters.endMonth, filters.budgetStartDay);
   clauses.push(...monthClauses);
   params.push(...monthParams);
 

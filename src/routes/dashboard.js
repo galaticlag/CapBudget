@@ -2,6 +2,7 @@
 'use strict';
 
 const { buildDashboardSummary, buildBudgetTypeSummary } = require('../services/dashboardService');
+const { getBudgetStartDay } = require('../db/household');
 
 function parseListParam(value) {
   if (!value) return [];
@@ -14,6 +15,7 @@ async function dashboardRoutes(app) {
     return buildDashboardSummary(request.householdDb, {
       startMonth,
       endMonth,
+      budgetStartDay: getBudgetStartDay(request.householdDb),
       cashflowId,
       accountId,
       categoryIds: parseListParam(categoryIds),
@@ -23,7 +25,7 @@ async function dashboardRoutes(app) {
 
   app.get('/api/dashboard/budget-types', async (request) => {
     const { startMonth, endMonth, cashflowId, accountId } = request.query;
-    return buildBudgetTypeSummary(request.householdDb, { startMonth, endMonth, cashflowId, accountId });
+    return buildBudgetTypeSummary(request.householdDb, { startMonth, endMonth, budgetStartDay: getBudgetStartDay(request.householdDb), cashflowId, accountId });
   });
 }
 
