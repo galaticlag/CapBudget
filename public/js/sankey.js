@@ -129,11 +129,23 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
   for (const cat of sortedRevenue) {
     if (cat.amountCents <= 0) continue;
     const catHsl = resolveCategoryHsl(cat.color, revenueColorIndex++);
-    const catIdx = addNode(`revcat:${cat.categoryId}`, cat.name, hslToCss(catHsl));
+    // BALANCED mode's promoted pseudo-categories (see promoteSubcategories in dashboard.js)
+    // share one real categoryId across every sibling subcategory of that category — the id
+    // must include subcategoryId too, or every sibling collapses into the same node.
+    const catId = cat.subcategoryId ? `revcat:${cat.categoryId}:${cat.subcategoryId}` : `revcat:${cat.categoryId}`;
+    const catIdx = addNode(catId, cat.name, hslToCss(catHsl));
     nodes[catIdx].raw = cat.amountCents;
     const subs = (cat.subcategories || []).filter((s) => s.amountCents > 0).sort(sortByName);
     if (subs.length === 0) {
-      pushLink(catIdx, centerIdx, cat.amountCents, { side: 'REVENUE', categoryId: cat.categoryId });
+      // BALANCED mode promotes each revenue subcategory to a standalone pseudo-category
+      // (see promoteSubcategories in dashboard.js) — carries its own subcategoryId through
+      // even though it has no nested subcategories of its own, so clicking it still
+      // filters the transaction list at subcategory granularity.
+      pushLink(catIdx, centerIdx, cat.amountCents, {
+        side: 'REVENUE',
+        categoryId: cat.categoryId,
+        ...(cat.subcategoryId ? { subcategoryId: cat.subcategoryId } : {})
+      });
     } else {
       pushLink(catIdx, centerIdx, cat.amountCents, { side: 'REVENUE', categoryId: cat.categoryId });
       subs.forEach((sub, subPosition) => {
@@ -194,6 +206,12 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
   // node of that role actually exists (e.g. no "revsub" column when no revenue
   // category has subcategory detail), keeping columns contiguous either way.
   const roleOf = (id) => (id === '__center__' ? 'center' : id.split(':')[0]);
+  // REVENUE for rev*/revcat/revsub node ids, EXPENSE for exp*, null for the center node.
+  const nodeSide = (id) => {
+    const role = roleOf(id);
+    if (role === 'center') return null;
+    return role.startsWith('rev') ? 'REVENUE' : 'EXPENSE';
+  };
   const presentRoles = new Set(nodes.map((n) => roleOf(n.id)));
   const roleDepth = new Map(
     ['revsub', 'revcat', 'center', 'expcat', 'expsub']
@@ -387,7 +405,7 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     .attr('fill', 'none')
     .style('cursor', 'pointer')
     .append('title')
-    .text((d) => `${d.source.name || 'Budget'} → ${d.target.name || 'Budget'} : ${formatValue ? formatValue(d.raw) : d.raw}`);
+    .text((d) => `${d.source.name || 'Budget'} → ${d.target.name || 'Budget'} : ${formatValue ? formatValue(d.raw, d.ref?.side) : d.raw}`);
 
   svg.selectAll('path.sankey-link-hit')
     .data(graph.links)
@@ -424,62 +442,6 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     .attr('fill', (d) => d.color || '#94a3b8')
     .attr('rx', 4);
 
-  function wrapText(textSelection, maxWidthFn, maxLines = 2) {
-    textSelection.each(function (d) {
-      const maxWidth = typeof maxWidthFn === 'function' ? maxWidthFn(d) : maxWidthFn;
-      const text = d3.select(this);
-      const full = text.text();
-      const x = text.attr('x');
-      const y = text.attr('y');
-      const dy = parseFloat(text.attr('dy') || '0');
-      text.text(null);
-      text.append('title').text(full);
-
-      const probe = text.append('tspan').text('');
-      const measure = (str) => {
-        probe.text(str);
-        return probe.node() ? probe.node().getComputedTextLength() : 0;
-      };
-
-      const words = full.split(/\s+/).filter(Boolean);
-      const lines = [];
-      let line = [];
-      for (const word of words) {
-        line.push(word);
-        if (measure(line.join(' ')) > maxWidth && line.length > 1) {
-          line.pop();
-          lines.push(line.join(' '));
-          line = [word];
-        }
-      }
-      if (line.length) lines.push(line.join(' '));
-
-      // A long name could otherwise wrap onto many lines and blow up the row
-      // height for every other node in the column: cap it and ellipsize the rest
-      // (full name is still available via the <title> tooltip added above).
-      if (lines.length > maxLines) {
-        lines.length = maxLines;
-        let last = lines[maxLines - 1];
-        let candidate = `${last}\u2026`;
-        while (measure(candidate) > maxWidth && last.length > 1) {
-          last = last.slice(0, -1).trimEnd();
-          candidate = `${last}\u2026`;
-        }
-        lines[maxLines - 1] = candidate;
-      }
-      probe.remove();
-
-      const lineHeight = 1.1;
-      lines.forEach((lineText, i) => {
-        text.append('tspan')
-          .attr('x', x)
-          .attr('y', y)
-          .attr('dy', `${dy + i * lineHeight}em`)
-          .text(lineText);
-      });
-    });
-  }
-
   // Categories now keep their own right-sized row (grown to fit children if
   // needed, see the restack pass above) instead of being stretched arbitrarily to
   // match a children span computed elsewhere — so, like every other node, the
@@ -490,7 +452,9 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
     .attr('dy', '0.35em')
     .attr('text-anchor', (d) => (d.x0 < width / 2 ? 'start' : 'end'))
     .attr('class', 'sankey-label')
-    .text((d) => `${d.name} (${formatValue ? formatValue(d.raw) : d.raw})`);
+    .each(function (d) {
+      d3.select(this).append('title').text(`${d.name} (${formatValue ? formatValue(d.raw, nodeSide(d.id)) : d.raw})`);
+    });
 
   // Wrap width per label = the real gap to the next column in the direction the
   // label grows, not a flat fraction of the total width — a flat share works for 2
@@ -506,7 +470,40 @@ function renderSankey(container, { revenue, expense }, { formatValue, onNodeClic
       : (growsRight ? neighborX - d.x1 : d.x0 - neighborX);
     return clamp(gap - 20, 70, 260);
   }
-  wrapText(labels, labelMaxWidth, 1);
+
+  // The amount is the part users actually need to always be able to read, so it
+  // must never be the thing that gets cut — only the category/subcategory name
+  // is truncated (with an ellipsis) to make room for it within the label's
+  // available width. Full "name (amount)" stays in the <title> tooltip above.
+  labels.each(function (d) {
+    const text = d3.select(this);
+    const maxWidth = labelMaxWidth(d);
+    const amountText = ` (${formatValue ? formatValue(d.raw, nodeSide(d.id)) : d.raw})`;
+    const x = text.attr('x');
+    const y = text.attr('y');
+
+    const probe = text.append('tspan').text('');
+    const measure = (str) => {
+      probe.text(str);
+      return probe.node() ? probe.node().getComputedTextLength() : 0;
+    };
+
+    const amountWidth = measure(amountText);
+    const nameMaxWidth = Math.max(0, maxWidth - amountWidth);
+
+    let name = d.name || '';
+    if (measure(name) > nameMaxWidth) {
+      let candidate = name;
+      while (candidate.length > 1 && measure(`${candidate}\u2026`) > nameMaxWidth) {
+        candidate = candidate.slice(0, -1).trimEnd();
+      }
+      name = candidate.length > 1 ? `${candidate}\u2026` : candidate;
+    }
+    probe.remove();
+
+    text.append('tspan').attr('x', x).attr('y', y).text(name);
+    text.append('tspan').text(amountText);
+  });
 }
 
 export { renderSankey };

@@ -3,14 +3,15 @@
 import { api, setToken, setHouseholdId } from '../api.js';
 import { el } from '../util.js';
 import { toast } from '../toast.js';
+import { APP_NAME } from '../constants.js';
 
 async function renderSetup(root, { onDone }) {
   root.innerHTML = '';
   const card = el('div', { class: 'login-card' }, [
     el('div', { class: 'logo-header' }, [
-      el('div', { class: 'logo' }, ['CB']),
+      el('img', { src: '/icon.svg', alt: APP_NAME, class: 'logo' }),
       el('div', {}, [
-        el('h1', { style: 'font-size:1.3rem' }, ['Bienvenue dans CapBudget']),
+        el('h1', { style: 'font-size:1.3rem' }, [`Bienvenue dans ${APP_NAME}`]),
         el('p', { class: 'category-subtle' }, ['Créez le compte administrateur pour démarrer.'])
       ])
     ]),
@@ -43,9 +44,9 @@ async function renderLogin(root, { onDone }) {
   root.innerHTML = '';
   const card = el('div', { class: 'login-card' }, [
     el('div', { class: 'logo-header' }, [
-      el('div', { class: 'logo' }, ['CB']),
+      el('img', { src: '/icon.svg', alt: APP_NAME, class: 'logo' }),
       el('div', {}, [
-        el('h1', { style: 'font-size:1.3rem' }, ['CapBudget']),
+        el('h1', { style: 'font-size:1.3rem' }, [APP_NAME]),
         el('p', { class: 'category-subtle' }, ['Connectez-vous pour continuer.'])
       ])
     ]),

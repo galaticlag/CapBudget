@@ -75,13 +75,22 @@ function percentLabel(partCents, totalCents) {
   if (total <= 0) return '***';
   const pct = (part / total) * 100;
   if (!Number.isFinite(pct)) return '***';
+  // A nonzero share under 1% would otherwise round down to a misleading 0%.
+  if (pct > 0 && Math.round(pct) === 0) return `${pct.toFixed(2)}%`;
   return `${Math.round(pct)}%`;
 }
 
-function percentLabelForNode(rawCents, sideTotalCents) {
-  // Sankey nodes are magnitudes (>= 0). When hiding amounts, show % share
-  // within the same side (revenue or expense). If the total is 0, show ***.
-  return percentLabel(rawCents, sideTotalCents);
+// "Restant" has no natural 100% base of its own (revenue and expense are almost
+// never balanced) — shown instead as the surplus/deficit vs. revenue (savings rate).
+function remainingPercentLabel(remainingCents, revenueCents) {
+  const revenue = Number(revenueCents) || 0;
+  if (revenue <= 0) return '***';
+  const pct = (Number(remainingCents) || 0) / revenue * 100;
+  if (!Number.isFinite(pct)) return '***';
+  // A nonzero share under 1% would otherwise round down to a misleading 0%.
+  if (pct !== 0 && Math.round(Math.abs(pct)) === 0) return `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`;
+  const rounded = Math.round(pct);
+  return `${rounded > 0 ? '+' : ''}${rounded}%`;
 }
 
 async function renderDashboard(root, { user } = {}) {
@@ -103,8 +112,10 @@ async function renderDashboard(root, { user } = {}) {
   };
 
   const filtersBar = el('div', { class: 'panel', id: 'dash-filters' });
-  const summaryGrid = el('div', { class: 'summary-grid', id: 'dash-summary' });
+  const summaryGrid = el('div', { class: 'summary-stack', id: 'dash-summary' });
+  const summaryPanel = el('div', { class: 'panel summary-panel' }, [summaryGrid]);
   const budgetTypePanel = el('div', { class: 'panel', id: 'dash-budget-types' });
+  const summaryBudgetGrid = el('div', { class: 'summary-budget-grid' }, [summaryPanel, budgetTypePanel]);
   const detailLevelRow = el('div', { class: 'sankey-detail-level-row' });
   const sankeyDefaultBanner = el('div', { class: 'info-box', style: 'display: none;' });
   const sankeyPanelTitle = el('div', { class: 'panel-header' }, [
@@ -168,7 +179,7 @@ async function renderDashboard(root, { user } = {}) {
   ]);
   const transactionsPanel = el('div', { class: 'panel', id: 'dash-transactions' });
 
-  root.appendChild(el('div', { class: 'dashboard' }, [filtersBar, summaryGrid, budgetTypePanel, sankeyPanel, transactionsPanel]));
+  root.appendChild(el('div', { class: 'dashboard' }, [filtersBar, summaryBudgetGrid, sankeyPanel, transactionsPanel]));
 
   let cashflows = [];
   let categories = [];
@@ -214,19 +225,20 @@ async function renderDashboard(root, { user } = {}) {
       return `Période sélectionnée : ${start} à ${end} · ${span} mois`;
     };
 
-    const periodHeader = el('div', { class: 'filter-group-label' }, ['PÉRIODE']);
-
     const shortcutRow = el('div', { class: 'filter-row period-shortcuts-row' }, [
-      el('div', { class: 'filter-row-chips' }, MONTH_SHORTCUTS.map((s) => el('button', {
-        class: `chip ${filterState.activeShortcut === s.months ? 'chip-active' : ''}`,
-        onclick: () => {
-          filterState.activeShortcut = s.months;
-          filterState.startMonth = currentMonthStr(-(s.months - 1));
-          filterState.endMonth = currentMonthStr();
-          filterState.sankeyFilter = null;
-          load();
-        }
-      }, [s.label]))),
+      el('div', { class: 'filter-row-chips' }, [
+        el('span', { class: 'filter-group-label period-inline-label' }, ['Période']),
+        ...MONTH_SHORTCUTS.map((s) => el('button', {
+          class: `chip ${filterState.activeShortcut === s.months ? 'chip-active' : ''}`,
+          onclick: () => {
+            filterState.activeShortcut = s.months;
+            filterState.startMonth = currentMonthStr(-(s.months - 1));
+            filterState.endMonth = currentMonthStr();
+            filterState.sankeyFilter = null;
+            load();
+          }
+        }, [s.label]))
+      ]),
       el('div', { class: 'period-cashflow' }, [
         el('label', { class: 'field-mini-label' }, ['Type de cashflow']),
         el('select', {
@@ -302,7 +314,9 @@ async function renderDashboard(root, { user } = {}) {
     const monthlyAllowed = monthsSelected > 1;
     if (!monthlyAllowed && filterState.monthlyView) filterState.monthlyView = false;
 
-    const periodSummary = el('div', { class: 'transaction-sub period-summary' }, [periodSummaryLabel()]);
+    // Single-month case is already obvious from the pill above — only spell out
+    // the range as text when a multi-month span needs the extra clarity.
+    const periodSummary = !monthlyAllowed ? null : el('div', { class: 'transaction-sub period-summary' }, [periodSummaryLabel()]);
 
     const monthlyRow = !monthlyAllowed ? null : el('div', { class: 'filter-row monthly-row' }, [
       el('div', { class: 'monthly-left' }, [
@@ -333,7 +347,6 @@ async function renderDashboard(root, { user } = {}) {
     ]);
 
     const stack = el('div', { class: 'stack-form' }, [
-      periodHeader,
       shortcutRow,
       navRow,
       periodSummary,
@@ -489,24 +502,43 @@ async function renderDashboard(root, { user } = {}) {
     ]));
     summaryGrid.appendChild(el('div', { class: 'metric-card balance' }, [
       el('span', { class: 'label' }, ['Restant']),
-      el('strong', {}, [filterState.hideAmounts ? '***' : formatCents(data.totals.remainingCents)])
+      el('strong', {}, [filterState.hideAmounts
+        ? remainingPercentLabel(data.totals.remainingCents, data.totals.revenueCents)
+        : formatCents(data.totals.remainingCents)])
     ]));
 
-    // Summary: no subcategories on either side. Balanced (default): revenue stays
-    // at category level, expense gets subcategory detail. Detailed: both sides.
+    // Summary: no subcategories on either side (revenue = category level). Balanced
+    // (default): revenue shows subcategory level instead (each subcategory becomes
+    // its own top-level node linked straight to the center, replacing its parent
+    // category rather than nesting under it), expense keeps full category+subcategory
+    // detail unchanged. Detailed: both sides show full category+subcategory nesting.
     const stripSubcategories = (nodes) => nodes.map((n) => ({ ...n, subcategories: [] }));
+    const promoteSubcategories = (nodes) => nodes.flatMap((cat) => {
+      const subs = (cat.subcategories || []).filter((s) => s.amountCents > 0);
+      if (subs.length === 0) return [{ ...cat, subcategories: [] }];
+      return subs.map((sub) => ({
+        categoryId: cat.categoryId,
+        subcategoryId: sub.subcategoryId,
+        name: sub.name,
+        amountCents: sub.amountCents,
+        color: sub.color || null,
+        subcategories: []
+      }));
+    });
     let revenueNodes = data.revenue;
     let expenseNodes = data.expense;
-    if (filterState.sankeyDetailLevel !== 'DETAILED') revenueNodes = stripSubcategories(revenueNodes);
+    if (filterState.sankeyDetailLevel === 'SUMMARY') revenueNodes = stripSubcategories(revenueNodes);
+    else if (filterState.sankeyDetailLevel === 'BALANCED') revenueNodes = promoteSubcategories(revenueNodes);
     if (filterState.sankeyDetailLevel === 'SUMMARY') expenseNodes = stripSubcategories(expenseNodes);
 
     const container = document.getElementById('sankey-container');
     renderSankey(container, { revenue: revenueNodes, expense: expenseNodes }, {
-      formatValue: (v) => {
+      formatValue: (v, side) => {
         if (!filterState.hideAmounts) return formatCents(v);
-        // Privacy mode: percentages are shown in the summary-by-type and sankey nodes,
-        // but the sankey renderer only gets values here, so keep placeholders.
-        return '***';
+        // Privacy mode: revenue's own sum is its 100% base, expense's own sum is its
+        // 100% base (kept separate — the two are rarely perfectly balanced).
+        const sideTotal = side === 'EXPENSE' ? data.totals.expenseCents : data.totals.revenueCents;
+        return percentLabel(v, sideTotal);
       },
       onNodeClick: (ref) => {
         // Filters the transaction list below without touching/re-rendering the sankey itself.

@@ -1,4 +1,4 @@
-// Central domain type definitions for CapBudget, mirroring the SQLite schema in
+// Central domain type definitions for Lyrava, mirroring the SQLite schema in
 // src/db/household.js (ensureHouseholdSchema). Ambient .d.ts file: no build step,
 // no runtime effect — used only by `tsc --checkJs` (see `npm run typecheck`) and by
 // editor/AI tooling for accurate autocomplete on service/route boundaries.

@@ -4,6 +4,7 @@ import { api, getToken, setToken, getHouseholdId, setHouseholdId, setUnauthorize
 import { initTheme, setTheme } from './theme.js';
 import { el } from './util.js';
 import { toast } from './toast.js';
+import { APP_NAME } from './constants.js';
 import { renderSetup, renderLogin } from './views/auth.js';
 import { renderAdmin } from './views/admin.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -34,6 +35,10 @@ let navDropdownEl = null;
 
 // Dashboard global UI state (per session). Views can read it and react to events.
 window.__capbudgetHideAmounts = false;
+
+// Minimalist line-icon eye / eye-slash (Feather icon paths, MIT-licensed).
+const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
 // Single global listener (registered once) closes whichever nav dropdown is currently open.
 document.addEventListener('click', (event) => {
@@ -115,39 +120,32 @@ function buildTopbar() {
     }, currentHouseholds.map((h) => el('option', { value: h.id, selected: h.id === getHouseholdId() ? 'selected' : undefined }, [h.name])))
     : null;
 
-  const currentHousehold = currentHouseholds.find((h) => h.id === getHouseholdId());
-  const titleText = isAdmin ? 'Console administrateur' : (currentHousehold?.name || 'Foyer');
-  const titleRow = el('div', { class: 'topbar-title-row' }, [el('h1', {}, [titleText])]);
-
-  if (!isAdmin && currentHousehold) {
-    titleRow.appendChild(el('button', {
-      class: 'icon-button',
-      type: 'button',
-      title: 'Renommer le foyer',
-      onclick: () => startEditingHouseholdName(titleRow, currentHousehold)
-    }, ['✏️']));
-  }
+  const brandMark = el('a', { href: isAdmin ? '#/admin' : '#/dashboard', class: 'brand-mark' }, [
+    el('img', { src: '/icon.svg', alt: APP_NAME, class: 'brand-icon' }),
+    el('span', { class: 'brand-name' }, [APP_NAME])
+  ]);
 
   const dashboardEye = (!isAdmin)
     ? el('button', {
-      class: 'ghost-button topbar-eye-toggle',
+      class: `ghost-button topbar-eye-toggle${window.__capbudgetHideAmounts ? ' amounts-hidden' : ''}`,
       type: 'button',
       title: 'Masquer / afficher les montants',
       onclick: () => {
         window.__capbudgetHideAmounts = !window.__capbudgetHideAmounts;
-        dashboardEye.replaceChildren(document.createTextNode(window.__capbudgetHideAmounts ? '🙈' : '👁️'));
+        dashboardEye.classList.toggle('amounts-hidden', window.__capbudgetHideAmounts);
+        dashboardEye.replaceChildren(el('span', { class: 'eye-icon', html: window.__capbudgetHideAmounts ? EYE_OFF_SVG : EYE_OPEN_SVG }));
         window.dispatchEvent(new CustomEvent('capbudget:hide-amounts-changed', {
           detail: { hideAmounts: window.__capbudgetHideAmounts }
         }));
       }
-    }, [window.__capbudgetHideAmounts ? '🙈' : '👁️'])
+    }, [el('span', { class: 'eye-icon', html: window.__capbudgetHideAmounts ? EYE_OFF_SVG : EYE_OPEN_SVG })])
     : null;
 
   return el('div', { class: 'topbar' }, [
     el('div', { class: 'topbar-branding' }, [
-      el('p', { class: 'eyebrow' }, ['CapBudget']),
-      titleRow
-    ]),
+      brandMark,
+      isAdmin ? el('p', { class: 'eyebrow admin-subtitle' }, ['Console administrateur']) : null
+    ].filter(Boolean)),
     el('div', { class: 'topbar-right' }, [
       householdSwitcher,
       dashboardEye,
@@ -164,35 +162,6 @@ function buildTopbar() {
       }, ['⏻ Déconnexion'])
     ].filter(Boolean))
   ]);
-}
-
-function startEditingHouseholdName(titleRow, household) {
-  const input = el('input', { type: 'text', class: 'household-name-input', value: household.name, maxlength: '100' });
-  titleRow.innerHTML = '';
-  titleRow.appendChild(input);
-  input.focus();
-  input.select();
-
-  let done = false;
-  async function save() {
-    if (done) return;
-    const nextName = input.value.trim();
-    if (!nextName || nextName === household.name) { done = true; renderShellForRoute(); return; }
-    done = true;
-    try {
-      await api.put('/api/household', { name: nextName });
-      household.name = nextName;
-      toast('Nom du foyer mis à jour.', { type: 'success' });
-    } catch (err) {
-      toast(err.message, { type: 'error' });
-    }
-    renderShellForRoute();
-  }
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
-    else if (e.key === 'Escape') { done = true; renderShellForRoute(); }
-  });
-  input.addEventListener('blur', save);
 }
 
 async function renderShellForRoute() {

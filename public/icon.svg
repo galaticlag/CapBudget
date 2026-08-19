@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Budget foyer — flux</title>
+  <desc id="desc">Icône minimaliste d'une maison contenant un flux entrant qui se sépare en deux branches.</desc>
+
+  <rect width="512" height="512" rx="92" fill="#0C3927"/>
+
+  <g fill="none" stroke="#F8F5EC" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Contour de maison interrompu afin d'intégrer le flux -->
+    <path d="M139 281V208L256 111L373 208V235"/>
+    <path d="M373 281V389C373 400.598 363.598 410 352 410H160C148.402 410 139 400.598 139 389V344"/>
+
+    <!-- Flux entrant et séparation type Sankey -->
+    <path d="M83 314H191C220 314 232 309 249 291L269 270C287 251 303 245 331 245H373"/>
+    <path d="M191 314C220 314 233 320 249 337L269 358C287 377 303 383 331 383H373"/>
+  </g>
+</svg>

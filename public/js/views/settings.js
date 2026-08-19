@@ -75,7 +75,7 @@ async function renderSettings(root, user) {
         const blob = await res.blob();
         const disposition = res.headers.get('Content-Disposition') || '';
         const match = /filename="([^"]+)"/.exec(disposition);
-        const filename = match ? match[1] : 'capbudget-backup.sqlite';
+        const filename = match ? match[1] : 'lyrava-backup.sqlite';
         const url = URL.createObjectURL(blob);
         const link = el('a', { href: url, download: filename });
         document.body.appendChild(link);

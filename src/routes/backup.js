@@ -25,7 +25,7 @@ async function backupRoutes(app) {
     request.householdDb.exec('PRAGMA wal_checkpoint(TRUNCATE);');
     const filePath = path.join(householdsDir, `${request.household.database_key}.sqlite`);
     reply.header('Content-Type', 'application/octet-stream');
-    reply.header('Content-Disposition', `attachment; filename="capbudget-backup-${timestamp()}.sqlite"`);
+    reply.header('Content-Disposition', `attachment; filename="lyrava-backup-${timestamp()}.sqlite"`);
     return reply.send(fs.createReadStream(filePath));
   });
 

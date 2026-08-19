@@ -1,4 +1,4 @@
-# CapBudget
+# Lyrava
 
 Self-hosted household budgeting app (built for Raspberry Pi / DietPi). It imports bank
 CSV exports, auto-categorizes transactions with user-defined rules, and visualizes
