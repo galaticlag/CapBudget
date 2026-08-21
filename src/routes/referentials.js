@@ -504,9 +504,9 @@ async function referentialRoutes(app) {
   app.put('/api/household/settings', async (request, reply) => {
     const { budgetStartDay } = request.body || {};
     const day = Number(budgetStartDay);
-    if (!Number.isInteger(day) || day < MIN_BUDGET_START_DAY || day > MAX_BUDGET_START_DAY) {
+    if (!Number.isInteger(day) || day === 0 || day < MIN_BUDGET_START_DAY || day > MAX_BUDGET_START_DAY) {
       reply.code(400);
-      return { error: `Jour de d\u00e9but du mois budg\u00e9taire invalide (entre ${MIN_BUDGET_START_DAY} et ${MAX_BUDGET_START_DAY}).` };
+      return { error: `Jour de d\u00e9but du mois budg\u00e9taire invalide (entre ${MIN_BUDGET_START_DAY} et ${MAX_BUDGET_START_DAY}, hors 0).` };
     }
     const before = getBudgetStartDay(request.householdDb);
     const saved = setBudgetStartDay(request.householdDb, day);

@@ -141,8 +141,8 @@ async function renderDashboard(root, { user } = {}) {
   // date range. But once budgetStartDay != 1, most of that period's days (and its
   // salary) fall in the FOLLOWING month, so users think of it as "août", not "juillet".
   // These two helpers translate only for DISPLAY: shift the label forward one month.
-  const toDisplayMonth = (monthStr) => (budgetStartDay > 1 ? shiftMonthStr(monthStr, 1) : monthStr);
-  const toInternalMonth = (displayMonthStr) => (budgetStartDay > 1 ? shiftMonthStr(displayMonthStr, -1) : displayMonthStr);
+  const toDisplayMonth = (monthStr) => (budgetStartDay !== 1 ? shiftMonthStr(monthStr, 1) : monthStr);
+  const toInternalMonth = (displayMonthStr) => (budgetStartDay !== 1 ? shiftMonthStr(displayMonthStr, -1) : displayMonthStr);
 
   // The exact revenue/expense node data + render options last passed to renderSankey
   // for the main chart — kept around so the "view large" popin can redraw the same
@@ -421,7 +421,8 @@ async function renderDashboard(root, { user } = {}) {
         const { startDate } = budgetMonthToDateRange(filterState.startMonth, budgetStartDay);
         const { endDate } = budgetMonthToDateRange(filterState.endMonth, budgetStartDay);
         const fmt = (iso) => new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${iso}T00:00:00Z`));
-        return `Du ${fmt(startDate)} au ${fmt(endDate)} — le mois budgétaire démarre le ${budgetStartDay} du mois précédent.`;
+        const startDayOfMonth = Number(startDate.slice(-2));
+        return `Du ${fmt(startDate)} au ${fmt(endDate)} — le mois budgétaire démarre le ${startDayOfMonth} du mois précédent.`;
       })()
     );
 
@@ -516,6 +517,18 @@ async function renderDashboard(root, { user } = {}) {
     budgetTypePanel.appendChild(rows);
   }
 
+  // Re-fetching + rebuilding panels (list/summary/sankey) after an inline edit
+  // (category, subcategory, cashflow, comment, archive) shouldn't yank the page
+  // back to the top — restore whatever scroll position the user was at once the
+  // rebuild settles.
+  function withScrollPreserved(fn) {
+    return async (...args) => {
+      const scrollY = window.scrollY;
+      await fn(...args);
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    };
+  }
+
   async function renderTransactionsPanel() {
     transactionsPanel.innerHTML = '';
     const header = el('div', { class: 'panel-header' }, [el('h2', {}, ['Transactions'])]);
@@ -526,7 +539,7 @@ async function renderDashboard(root, { user } = {}) {
           class: 'ghost-button',
           style: 'margin-left: 4px; padding: 0 6px;',
           title: 'Retirer le filtre',
-          onclick: () => { filterState.sankeyFilter = null; renderTransactionsPanel(); }
+          onclick: () => { filterState.sankeyFilter = null; withScrollPreserved(renderTransactionsPanel)(); }
         }, ['×'])
       ]));
     }
@@ -557,7 +570,7 @@ async function renderDashboard(root, { user } = {}) {
     const list = el('div', { class: 'transaction-list' });
     for (const t of rows) {
       list.appendChild(renderTransactionRow(t, {
-        categories, subcategoriesByCategory, categoryById, budgetTypeById, accountById, cashflows, onChange: load
+        categories, subcategoriesByCategory, categoryById, budgetTypeById, accountById, cashflows, onChange: withScrollPreserved(load)
       }));
     }
     transactionsPanel.appendChild(list);

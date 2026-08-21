@@ -26,14 +26,31 @@ function renderTransactionRow(t, ctx) {
 
   const isExpense = t.nature === 'EXPENSE';
 
-  async function patch(payload, successMessage) {
+  // A category change also resets the subcategory — calling the (potentially
+  // heavy, list-rebuilding) onChange() right away would tear down this very row
+  // before the user gets a chance to also pick the new subcategory. `silent: true`
+  // skips that immediate refresh; callers that need it deferred schedule it
+  // themselves (see categorySelect below) once the user has had a moment to act.
+  async function patch(payload, successMessage, { silent = false } = {}) {
     try {
       await api.put(`/api/transactions/${t.id}`, payload);
       if (successMessage) toast(successMessage, { type: 'success' });
-      onChange();
+      if (!silent) onChange();
     } catch (err) {
       toast(err.message, { type: 'error' });
     }
+  }
+
+  // Grace period between a category pick and the follow-up subcategory pick —
+  // cleared/fired early the moment the subcategory is actually picked.
+  let pendingReloadTimer = null;
+  const GRACE_PERIOD_MS = 4000;
+  function scheduleDeferredReload() {
+    if (pendingReloadTimer) clearTimeout(pendingReloadTimer);
+    pendingReloadTimer = setTimeout(() => { pendingReloadTimer = null; onChange(); }, GRACE_PERIOD_MS);
+  }
+  function cancelDeferredReload() {
+    if (pendingReloadTimer) { clearTimeout(pendingReloadTimer); pendingReloadTimer = null; }
   }
 
   function subcategoryOptionsFor(categoryId, selectedId) {
@@ -47,7 +64,12 @@ function renderTransactionRow(t, ctx) {
   }
 
   const subcategorySelect = el('select', {
-    onchange: (e) => patch({ subcategoryId: e.target.value || null }, 'Sous-catégorie mise à jour.')
+    onchange: (e) => {
+      // A subcategory pick always means the user is done deciding — cancel any
+      // pending deferred reload from a just-prior category change and refresh now.
+      cancelDeferredReload();
+      patch({ subcategoryId: e.target.value || null }, 'Sous-catégorie mise à jour.');
+    }
   }, subcategoryOptionsFor(t.category_id, t.subcategory_id));
 
   const sortedCategories = (categories || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'fr', { sensitivity: 'base' }));
@@ -59,7 +81,9 @@ function renderTransactionRow(t, ctx) {
       // it immediately and force the user to pick a fresh one.
       subcategorySelect.innerHTML = '';
       for (const opt of subcategoryOptionsFor(newCategoryId, null)) subcategorySelect.appendChild(opt);
-      patch({ categoryId: newCategoryId, subcategoryId: null }, 'Catégorie mise à jour.');
+      patch({ categoryId: newCategoryId, subcategoryId: null }, 'Catégorie mise à jour — choisissez la sous-catégorie.', { silent: true });
+      subcategorySelect.focus();
+      scheduleDeferredReload();
     }
   }, sortedCategories.map((c) => el('option', { value: c.id, selected: c.id === t.category_id ? 'selected' : undefined }, [c.name])));
 

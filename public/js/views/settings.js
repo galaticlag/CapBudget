@@ -1,7 +1,7 @@
 'use strict';
 
 import { api, getToken, getHouseholdId } from '../api.js';
-import { el } from '../util.js';
+import { el, clampBudgetStartDay, resolveBudgetDayOfMonth } from '../util.js';
 import { toast } from '../toast.js';
 import { setTheme } from '../theme.js';
 
@@ -38,25 +38,61 @@ async function renderSettings(root, user) {
 
   budgetMonthPanel.appendChild(el('div', { class: 'panel-header' }, [el('h2', {}, ['Mois budgétaire'])]));
   budgetMonthPanel.appendChild(el('p', { class: 'field-hint' }, [
-    'Jour du mois à partir duquel démarre votre période budgétaire. Par défaut (1), le mois ' +
-    'budgétaire correspond au mois civil. Si votre salaire est versé en fin de mois (par ' +
-    'exemple le 28), le compter dès le 1er du mois suivant comme "nouveau mois" est trompeur : ' +
-    'vous vivez en réalité sur ce salaire jusqu\u2019au mois suivant. Choisissez un jour de ' +
-    'départ proche de votre date de versement pour que le mois budgétaire corresponde à votre ' +
-    'réalité (ex. le 28 août au 27 septembre plutôt que le 1er au 30 septembre).'
+    'Jour à partir duquel démarre votre période budgétaire. Par défaut (1), le mois ' +
+    'budgétaire correspond au mois civil. Si votre salaire est versé en fin de mois, le ' +
+    'compter dès le 1er du mois suivant comme "nouveau mois" est trompeur : vous vivez en ' +
+    'réalité sur ce salaire jusqu\u2019au mois suivant. Choisissez un jour positif pour un ' +
+    'jour fixe du mois (ex. "25" pour un salaire toujours versé le 25), ou un jour négatif ' +
+    'compté depuis la fin du mois (ex. "-1" pour le dernier jour du mois, quel que soit le ' +
+    'nombre de jours qu\u2019il compte — 28, 29, 30 ou 31).'
   ]));
   let budgetStartDay = 1;
   try {
     const settings = await api.get('/api/household/settings');
-    budgetStartDay = Number(settings?.budgetStartDay) || 1;
+    budgetStartDay = clampBudgetStartDay(settings?.budgetStartDay);
   } catch (err) { toast(err.message, { type: 'error' }); }
-  const budgetDaySelect = el('select', {}, Array.from({ length: 28 }, (_, i) => i + 1).map((day) => el('option', {
+
+  // Negative options read "-1 (dernier jour du mois précédent)" etc. — ordinal-from-end
+  // phrasing since "-1" alone doesn't obviously mean "last day" to most users.
+  const negativeDayLabel = (n) => {
+    if (n === 1) return 'dernier jour du mois précédent';
+    if (n === 2) return 'avant-dernier jour du mois précédent';
+    return `${n}e jour avant la fin du mois précédent`;
+  };
+  const positiveOptions = Array.from({ length: 28 }, (_, i) => i + 1).map((day) => el('option', {
     value: String(day),
     selected: day === budgetStartDay ? 'selected' : undefined
-  }, [String(day)])));
+  }, [`${day} (${day === 1 ? '1er' : `${day}e`} du mois)`]));
+  const negativeOptions = Array.from({ length: 15 }, (_, i) => -(i + 1)).map((day) => el('option', {
+    value: String(day),
+    selected: day === budgetStartDay ? 'selected' : undefined
+  }, [`${day} (${negativeDayLabel(-day)})`]));
+  const budgetDaySelect = el('select', {}, [
+    el('optgroup', { label: 'Compté depuis la fin du mois précédent' }, negativeOptions),
+    el('optgroup', { label: 'Jour fixe du mois' }, positiveOptions)
+  ]);
+
+  // Concrete live example (uses the current calendar month) so the abstract day
+  // encoding — especially the negative, month-length-dependent one — is never
+  // left for the user to compute in their head.
+  const budgetDayExample = el('p', { class: 'field-hint' });
+  const updateBudgetDayExample = () => {
+    const day = clampBudgetStartDay(budgetDaySelect.value);
+    const today = new Date();
+    const resolvedDay = resolveBudgetDayOfMonth(today.getFullYear(), today.getMonth(), day);
+    const exampleDate = new Date(today.getFullYear(), today.getMonth(), resolvedDay);
+    const label = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long' }).format(exampleDate);
+    budgetDayExample.textContent = day > 0
+      ? `Pour le mois en cours, votre mois budgétaire démarre le ${label}.`
+      : `Pour le mois en cours, votre mois budgétaire démarre le ${label} (s\u2019adapte automatiquement aux mois plus courts ou plus longs).`;
+  };
+  budgetDaySelect.addEventListener('change', updateBudgetDayExample);
+  updateBudgetDayExample();
+
   const budgetMonthForm = el('form', { class: 'stack-form' }, [
     el('label', { class: 'field-mini-label' }, ['Jour de début du mois budgétaire']),
     budgetDaySelect,
+    budgetDayExample,
     el('button', { class: 'primary-button', type: 'submit' }, ['Enregistrer'])
   ]);
   budgetMonthForm.addEventListener('submit', async (e) => {
